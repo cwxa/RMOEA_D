@@ -65,15 +65,12 @@ class MOEADBaseline:
         self.archive = []
         self.history = []
 
-        logger.info("=" * 60)
-        logger.info("MOEA/D Baseline Solver Initialized")
-        logger.info("Instance: %s, Np=%d, Gen=%d, CR=%.2f, T=%d, Seed=%d",
-                    instance_name, n_pop, max_gen, crossover_rate, fixed_T, seed)
-        logger.info("=" * 60)
+        logger.info("MOEA/D | %s | Np=%d G=%d T=%d", instance_name, n_pop, max_gen, fixed_T)
+        logger.debug("Seed=%d CR=%.2f", seed, crossover_rate)
 
     def _init_population(self):
         """Initialize population using MIX3 strategy."""
-        logger.info("Initializing population with MIX3 strategy...")
+        logger.debug("Initializing population with MIX3 strategy...")
         start = time.perf_counter()
         pop = init_mix3(self.instance, self.n_pop, self.rng)
         objectives = []
@@ -81,7 +78,7 @@ class MOEADBaseline:
             m, w, mc, wc = decode(os_vec, ma_vec, self.instance)
             objectives.append((mc, wc))
         elapsed = time.perf_counter() - start
-        logger.info("Population initialized: %d individuals in %.4f s", len(pop), elapsed)
+        logger.debug("Population initialized: %d individuals in %.4f s", len(pop), elapsed)
         return pop, objectives
 
     def _compute_pf(self, objectives):
@@ -118,14 +115,14 @@ class MOEADBaseline:
 
         # Load instance
         self.instance = load_instance(self.instance_name, self.data_dir, self.seed)
-        logger.info("Instance loaded: %d jobs, %d machines, %d operations",
+        logger.debug("Instance loaded: %d jobs, %d machines, %d operations",
                     self.instance["n_jobs"], self.instance["n_machines"],
                     self.instance["total_ops"])
 
         # Initialize weights and fixed neighbors
         self.weights = generate_weights(self.n_pop)
         self.B = compute_neighbors(self.weights, self.fixed_T)
-        logger.info("Weight vectors generated: %d vectors, fixed T=%d",
+        logger.debug("Weight vectors generated: %d vectors, fixed T=%d",
                     len(self.weights), self.fixed_T)
 
         # Initialize population
@@ -136,12 +133,12 @@ class MOEADBaseline:
             min(o[0] for o in objectives),
             min(o[1] for o in objectives),
         )
-        logger.info("Initial reference point: z=(%.4f, %.4f)", z[0], z[1])
+        logger.debug("Initial reference point: z=(%.4f, %.4f)", z[0], z[1])
 
         # Initial PF and archive
         pf = self._compute_pf(objectives)
         self._update_archive(population, objectives)
-        logger.info("Initial non-dominated front size: %d", len(pf))
+        logger.debug("Initial non-dominated front size: %d", len(pf))
 
         # Main loop
         for gen in range(1, self.max_gen + 1):
@@ -184,8 +181,11 @@ class MOEADBaseline:
             })
 
             if gen % 20 == 0 or gen == 1:
-                logger.info("Gen %d | PF=%d | Archive=%d | HV=%.6f | z=(%.2f,%.2f) | Time=%.3fs",
+                logger.debug("Gen %d | PF=%d | Archive=%d | HV=%.6f | z=(%.2f,%.2f) | Time=%.3fs",
                             gen, len(pf), archive_size, hv, z[0], z[1], gen_time)
+            # 关键里程碑才打印控制台
+            if gen % 100 == 0:
+                logger.info("Gen %d/%d | HV=%.6f | %.1fs", gen, self.max_gen, hv, gen_time)
 
         total_time = time.perf_counter() - total_start
 
@@ -213,11 +213,9 @@ class MOEADBaseline:
             if not dominated:
                 fuzzy_pf.append(a)
 
-        logger.info("=" * 60)
-        logger.info("MOEA/D Baseline completed in %.4f s", total_time)
-        logger.info("Final non-dominated front size: %d", len(final_pf))
-        logger.info("Final HV: %.6f", final_hv)
-        logger.info("=" * 60)
+        logger.info("Done | PF=%d HV=%.6f | %.2fs", len(final_pf), final_hv, total_time)
+        logger.debug("Final non-dominated front size: %d", len(final_pf))
+        logger.debug("Final HV: %.6f", final_hv)
 
         # Format PF with objective names for readability
         # 为Pareto前沿添加目标名称，便于查看
@@ -261,5 +259,5 @@ class MOEADBaseline:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
 
-        logger.info("Results saved to: %s", filepath)
+        logger.debug("Results saved to: %s", filepath)
         return filepath

@@ -14,6 +14,38 @@ def decode(os_vec, ma_vec, instance):
     Returns:
         (makespan, workload, makespan_crisp, workload_crisp)
         返回模糊数和清晰值，供算法不同环节使用。
+    """
+    makespan, total_workload, mc, wc, _ = _decode_inner(os_vec, ma_vec, instance)
+    return makespan, total_workload, mc, wc
+
+
+def decode_with_schedule(os_vec, ma_vec, instance):
+    """
+    Decode OS and MA vectors, returning detailed per-operation schedule.
+    解码并返回每道工序的详细调度信息，用于甘特图可视化和结果分析。
+
+    Returns:
+        (makespan, workload, makespan_crisp, workload_crisp, schedule)
+        schedule: list of dicts, each containing:
+            - job_id: 工件编号 (0-indexed)
+            - op_idx: 工序在该工件中的序号 (0-indexed)
+            - machine: 所选机器编号
+            - machine_label: 机器标签 (如 "M1")
+            - start: 开始时间清晰值
+            - finish: 结束时间清晰值
+            - processing_time: 加工时间清晰值
+            - fuzzy_start: (t1, t2, t3) 模糊开始时间
+            - fuzzy_finish: (t1, t2, t3) 模糊结束时间
+            - fuzzy_processing: (t1, t2, t3) 模糊加工时间
+    """
+    makespan, total_workload, mc, wc, schedule = _decode_inner(os_vec, ma_vec, instance)
+    return makespan, total_workload, mc, wc, schedule
+
+
+def _decode_inner(os_vec, ma_vec, instance):
+    """
+    Internal decoder: computes objectives and records per-operation schedule.
+    内部解码器：计算目标值并记录每道工序的调度详情。
 
     os_vec: list of job indices (length = total_ops)
     ma_vec: list of machine indices (length = total_ops)
@@ -22,27 +54,24 @@ def decode(os_vec, ma_vec, instance):
     n_machines = instance["n_machines"]
     jobs = instance["jobs"]
 
-    # Track next operation index for each job
     # 跟踪每个工件的下一道工序索引
     op_counter = [0] * n_jobs
-    # Completion time of last scheduled op for each job (fuzzy)
     # 每个工件最后一道工序的完成时间（模糊数）
     job_ready = [ZERO] * n_jobs
-    # Machine ready times (fuzzy)
     # 每台机器的就绪时间（模糊数）
     machine_ready = [ZERO] * n_machines
 
     total_workload = ZERO
     op_idx = 0
+    schedule = []  # 收集每道工序的调度详情
 
-    for job_id in os_vec:
+    for pos, job_id in enumerate(os_vec):
         oi = op_counter[job_id]
         op_counter[job_id] += 1
         alts = jobs[job_id][oi]
         chosen_m = ma_vec[op_idx]
         op_idx += 1
 
-        # Find the alternative matching chosen machine
         # 查找与所选机器匹配的候选方案
         proc = None
         for alt in alts:
@@ -50,26 +79,41 @@ def decode(os_vec, ma_vec, instance):
                 proc = alt
                 break
         if proc is None:
-            # Fallback: pick first available
+            # 回退：选第一个可用方案
             proc = alts[0]
             chosen_m = proc[0]
 
         _, a, b, c = proc
         ptime = FuzzyNumber(a, b, c)
 
-        # Start time = max(job_ready, machine_ready)
         # 开始时间 = max(工件就绪时间, 机器就绪时间)
         start = fuzzy_max(job_ready[job_id], machine_ready[chosen_m])
         finish = start + ptime
+
+        # 记录调度详情
+        schedule.append({
+            "job_id": job_id,
+            "job_label": f"J{job_id + 1}",
+            "op_idx": oi,
+            "op_label": f"O{job_id + 1},{oi + 1}",
+            "machine": chosen_m,
+            "machine_label": f"M{chosen_m + 1}",
+            "position": pos,  # 在OS向量中的位置
+            "start": start.clear_value(),
+            "finish": finish.clear_value(),
+            "processing_time": ptime.clear_value(),
+            "fuzzy_start": start.to_tuple(),
+            "fuzzy_finish": finish.to_tuple(),
+            "fuzzy_processing": ptime.to_tuple(),
+        })
 
         job_ready[job_id] = finish
         machine_ready[chosen_m] = finish
         total_workload = total_workload + ptime
 
-    # Makespan = max of all job completion times
     # 最大完工时间 = 所有工件完成时间的最大值
     makespan = job_ready[0]
     for t in job_ready[1:]:
         makespan = fuzzy_max(makespan, t)
 
-    return makespan, total_workload, makespan.clear_value(), total_workload.clear_value()
+    return makespan, total_workload, makespan.clear_value(), total_workload.clear_value(), schedule

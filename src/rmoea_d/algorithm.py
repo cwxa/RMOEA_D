@@ -17,9 +17,10 @@ import os
 
 from .core.instance import load_instance
 from .core.operators import init_mix3
-from .core.encoding import decode
+from .core.encoding import decode, decode_with_schedule
 from .core.moead import generate_weights, compute_neighbors, moead_generation
 from .core.qlearning import QLearningPAS
+from .core.rvns import RVNS, rvns_generation
 from .utils.metrics import non_dominated_sort, compute_hv
 from .core.fuzzy import fuzzy_dominates
 
@@ -44,6 +45,8 @@ class RMOEAD:
         ql_gamma=0.6,
         ql_epsilon=0.8,
         ql_actions=None,
+        enable_rvns=True,
+        fixed_T=None,
     ):
         """
         Initialize RMOEA/D solver.
@@ -60,6 +63,8 @@ class RMOEAD:
             ql_gamma: Q-learning discount factor
             ql_epsilon: Q-learning epsilon for exploration
             ql_actions: List of candidate T values
+            enable_rvns: Whether to enable RVNS local search
+            fixed_T: Fixed neighborhood size (if None, use Q-learning)
         """
         self.instance_name = instance_name
         self.n_pop = n_pop
@@ -67,12 +72,17 @@ class RMOEAD:
         self.crossover_rate = crossover_rate
         self.seed = seed
         self.data_dir = data_dir
+        self.enable_rvns = enable_rvns
+        self.fixed_T = fixed_T
 
         # Q-learning parameters
         self.ql_alpha = ql_alpha
         self.ql_gamma = ql_gamma
         self.ql_epsilon = ql_epsilon
         self.ql_actions = ql_actions if ql_actions is not None else [5, 10, 15, 20]
+
+        # RVNS parameters
+        self.rvns = RVNS(n_operators=5, lp=40) if enable_rvns else None
 
         # Internal state
         self.rng = np.random.RandomState(seed)
@@ -82,17 +92,16 @@ class RMOEAD:
         self.archive = []  # Elite archive: list of (os, ma, obj)
         self.history = []  # Generation history for analysis
 
-        logger.info("=" * 60)
-        logger.info("RMOEA/D Solver Initialized")
-        logger.info("Instance: %s, Np=%d, Gen=%d, CR=%.2f, Seed=%d",
-                    instance_name, n_pop, max_gen, crossover_rate, seed)
-        logger.info("Q-learning: alpha=%.2f, gamma=%.2f, epsilon=%.2f, actions=%s",
-                    ql_alpha, ql_gamma, ql_epsilon, self.ql_actions)
-        logger.info("=" * 60)
+        logger.info("RMOEA/D | %s | Np=%d G=%d | %s | %s",
+                    instance_name, n_pop, max_gen,
+                    f"QL(T={self.ql_actions})" if fixed_T is None else f"FixedT={fixed_T}",
+                    "RVNS" if enable_rvns else "noRVNS")
+        logger.debug("Seed=%d CR=%.2f alpha=%.2f gamma=%.2f epsilon=%.2f",
+                     seed, crossover_rate, ql_alpha, ql_gamma, ql_epsilon)
 
     def _init_population(self):
         """Initialize population using MIX3 strategy."""
-        logger.info("Initializing population with MIX3 strategy...")
+        logger.debug("Initializing population with MIX3 strategy...")
         start = time.perf_counter()
         pop = init_mix3(self.instance, self.n_pop, self.rng)
         objectives = []
@@ -102,7 +111,7 @@ class RMOEAD:
             objectives.append((mc, wc))
             fuzzy_objs.append((m, w))
         elapsed = time.perf_counter() - start
-        logger.info("Population initialized: %d individuals in %.4f s", len(pop), elapsed)
+        logger.debug("Population initialized: %d individuals in %.4f s", len(pop), elapsed)
         return pop, objectives, fuzzy_objs
 
     def _compute_pf(self, objectives):
@@ -144,13 +153,13 @@ class RMOEAD:
 
         # Load instance
         self.instance = load_instance(self.instance_name, self.data_dir, self.seed)
-        logger.info("Instance loaded: %d jobs, %d machines, %d operations",
+        logger.debug("Instance loaded: %d jobs, %d machines, %d operations",
                     self.instance["n_jobs"], self.instance["n_machines"],
                     self.instance["total_ops"])
 
         # Initialize weights
         self.weights = generate_weights(self.n_pop)
-        logger.info("Weight vectors generated: %d vectors", len(self.weights))
+        logger.debug("Weight vectors generated: %d vectors", len(self.weights))
 
         # Initialize Q-learning
         self.ql = QLearningPAS(
@@ -169,35 +178,47 @@ class RMOEAD:
             min(o[0] for o in objectives),
             min(o[1] for o in objectives),
         )
-        logger.info("Initial reference point: z=(%.4f, %.4f)", z[0], z[1])
+        logger.debug("Initial reference point: z=(%.4f, %.4f)", z[0], z[1])
 
         # Initial PF and archive (using crisp values for evolution)
         pf = self._compute_pf(objectives)
         self._update_archive(population, objectives)
-        logger.info("Initial non-dominated front size: %d", len(pf))
+        logger.debug("Initial non-dominated front size: %d", len(pf))
 
         # Main loop
         for gen in range(1, self.max_gen + 1):
             gen_start = time.perf_counter()
 
-            # Step 1: Q-learning selects T
-            T, is_first = self.ql.step(pf, self.rng)
-            logger.info("Generation %d/%d: Q-learning selected T=%d", gen, self.max_gen, T)
+            # Step 1: Apply RVNS to each solution (论文 Algorithm 1 line 4)
+            if self.enable_rvns:
+                population, objectives, z = rvns_generation(
+                    population, objectives, self.weights,
+                    self.instance, z, self.rng, self.rvns
+                )
 
-            # Step 2: Recompute neighbors with new T
+            # Step 2: Q-learning selects T or use fixed T
+            if self.fixed_T is not None:
+                T = self.fixed_T
+                is_first = False
+                logger.debug("Generation %d/%d: Using fixed T=%d", gen, self.max_gen, T)
+            else:
+                T, is_first = self.ql.step(pf, self.rng)
+                logger.debug("Generation %d/%d: Q-learning selected T=%d", gen, self.max_gen, T)
+
+            # Step 3: Recompute neighbors with new T
             B = compute_neighbors(self.weights, T)
 
-            # Step 3: MOEA/D generation
+            # Step 4: MOEA/D generation
             population, objectives, z = moead_generation(
                 population, objectives, self.weights, B,
                 self.instance, z, self.crossover_rate, self.rng
             )
 
-            # Step 4: Update PF and archive
+            # Step 5: Update PF and archive
             pf = self._compute_pf(objectives)
             archive_size = self._update_archive(population, objectives)
 
-            # Step 5: Compute HV
+            # Step 6: Compute HV
             hv = compute_hv(pf)
 
             gen_time = time.perf_counter() - gen_start
@@ -211,7 +232,7 @@ class RMOEAD:
             avg_workload = float(np.mean(pf_array[:, 1]))
 
             # Record history
-            self.history.append({
+            history_entry = {
                 "gen": gen,
                 "T": T,
                 "pf_size": len(pf),
@@ -223,12 +244,18 @@ class RMOEAD:
                 "avg_makespan": avg_makespan,
                 "avg_workload": avg_workload,
                 "time": gen_time,
-            })
+            }
+            if self.enable_rvns:
+                history_entry["rvns_probs"] = self.rvns.get_probabilities()
+            self.history.append(history_entry)
 
             # Periodic logging
             if gen % 20 == 0 or gen == 1:
-                logger.info("Gen %d | T=%d | PF=%d | Archive=%d | HV=%.6f | z=(%.2f,%.2f) | Time=%.3fs",
+                logger.debug("Gen %d | T=%d | PF=%d | Archive=%d | HV=%.6f | z=(%.2f,%.2f) | Time=%.3fs",
                             gen, T, len(pf), archive_size, hv, z[0], z[1], gen_time)
+            # 关键里程碑才打印控制台
+            if gen % 100 == 0:
+                logger.info("Gen %d/%d | HV=%.6f | %.1fs", gen, self.max_gen, hv, gen_time)
 
         total_time = time.perf_counter() - total_start
 
@@ -256,11 +283,27 @@ class RMOEAD:
             if not dominated:
                 fuzzy_pf.append(a)
 
-        logger.info("=" * 60)
-        logger.info("Optimization completed in %.4f s", total_time)
-        logger.info("Final non-dominated front size: %d", len(final_pf))
-        logger.info("Final HV: %.6f", final_hv)
-        logger.info("=" * 60)
+        logger.info("Done | PF=%d HV=%.6f | %.2fs", len(final_pf), final_hv, total_time)
+        logger.debug("Final non-dominated front size: %d", len(final_pf))
+        logger.debug("Final HV: %.6f", final_hv)
+
+        # ── 对存档中的非支配解重新解码，获取详细调度过程数据 ──
+        # 用于结果JSON和甘特图可视化
+        best_schedules = []
+        for rank, (os_vec, ma_vec, obj) in enumerate(self.archive):
+            _, _, _, _, schedule = decode_with_schedule(os_vec, ma_vec, self.instance)
+            entry = {
+                "rank": rank + 1,
+                "makespan_crisp": obj[0],
+                "workload_crisp": obj[1],
+                "num_operations": len(schedule),
+                "schedule": schedule,  # 每道工序的详细调度信息
+            }
+            best_schedules.append(entry)
+
+        # 找到最佳解（makespan最小的解，按三阶段排序算子比较）
+        # 在模糊PF中对应选择rank最低的
+        best_solution = best_schedules[0] if best_schedules else None
 
         # Format PF with objective names for readability
         # 为Pareto前沿添加目标名称，便于查看
@@ -286,13 +329,20 @@ class RMOEAD:
             "final_hv": final_hv,
             "total_time": total_time,
             "history": self.history,
-            "q_table": self.ql.q_table.tolist(),
+            "q_table": self.ql.q_table.tolist() if self.ql else None,
+            "rvns_final_probs": self.rvns.get_probabilities() if self.rvns else None,
+            # ── 调度过程数据 (用于甘特图和结果分析) ──
+            "schedules": best_schedules,
+            "best_solution": best_solution,
+            "num_machines": self.instance["n_machines"],
+            "num_jobs": self.instance["n_jobs"],
         }
         return results
 
     def save_results(self, results, output_dir="results"):
         """Save results to JSON file with grouped directory structure.
         按实例和算法分组存储结果文件：results/Mk01/RMOEA_D/xxx.json
+        同时自动生成甘特图到 charts/schedules/<instance>/
         """
         # Grouped directory: results/<instance>/<algorithm>/
         algo_dir = os.path.join(output_dir, self.instance_name, "RMOEA_D")
@@ -304,5 +354,15 @@ class RMOEAD:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
 
-        logger.info("Results saved to: %s", filepath)
+        logger.debug("Results saved to: %s", filepath)
+
+        # ── 自动生成甘特图 ──
+        try:
+            from .utils.visualization import generate_gantt_from_results
+            gantt_paths = generate_gantt_from_results(results)
+            if gantt_paths:
+                logger.debug("Gantt charts: %d generated for %s", len(gantt_paths), self.instance_name)
+        except Exception as e:
+            logger.warning("Gantt chart generation failed: %s", e)
+
         return filepath
