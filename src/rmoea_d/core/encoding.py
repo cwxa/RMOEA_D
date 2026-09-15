@@ -6,6 +6,44 @@ Encoding/decoding: OS+MA vectors to fuzzy objective values.
 from .fuzzy import FuzzyNumber, fuzzy_max, ZERO
 
 
+def decode_crisp(os_vec, ma_vec, instance):
+    """
+    零分配解码：仅返回 crisp makespan 和 workload，用于进化热路径。
+    使用展平为 list-of-lists 的 crisp_times 表，O(1) 数组索引，全程零 Python 对象分配。
+    """
+    n_jobs = instance["n_jobs"]
+    n_machines = instance["n_machines"]
+    crisp_times = instance["crisp_times"]
+
+    op_counter = [0] * n_jobs
+    job_ready = [0.0] * n_jobs
+    machine_ready = [0.0] * n_machines
+    total_workload = 0.0
+    op_idx_global = 0
+
+    for job_id in os_vec:
+        oi = op_counter[job_id]
+        op_counter[job_id] += 1
+        chosen_m = ma_vec[op_idx_global]
+        op_idx_global += 1
+
+        # O(1) 数组索引替代 dict.get，消除哈希计算
+        ptime = crisp_times[job_id][oi][chosen_m]
+
+        start = job_ready[job_id] if job_ready[job_id] > machine_ready[chosen_m] else machine_ready[chosen_m]
+        finish = start + ptime
+        job_ready[job_id] = finish
+        machine_ready[chosen_m] = finish
+        total_workload += ptime
+
+    makespan = job_ready[0]
+    for t in job_ready[1:]:
+        if t > makespan:
+            makespan = t
+
+    return makespan, total_workload
+
+
 def decode(os_vec, ma_vec, instance):
     """
     Decode OS and MA vectors into fuzzy makespan and total workload.

@@ -11,7 +11,7 @@ Variable Neighborhood Search based on Reinforcement Learning (RVNS).
 import numpy as np
 import logging
 
-from .encoding import decode
+from .encoding import decode, decode_crisp
 from .operators import _get_op_index, _repair_ma_for_os
 
 logger = logging.getLogger(__name__)
@@ -19,42 +19,32 @@ logger = logging.getLogger(__name__)
 
 def _build_schedule_info(os_vec, ma_vec, instance):
     """
-    解码并构建完整的调度信息，用于局部搜索。
-    返回每个工序的详细调度信息列表。
+    解码并构建完整的调度信息，用于LS3（最大负载机器局部搜索）。
+    使用预计算的 crisp_times 表，O(1) 查找加工时间。
     """
     n_jobs = instance["n_jobs"]
     n_machines = instance["n_machines"]
     jobs = instance["jobs"]
+    crisp_times = instance["crisp_times"]
 
     op_counter = [0] * n_jobs
-    job_ready = [0.0] * n_jobs          # 清晰值时间
+    job_ready = [0.0] * n_jobs
     machine_ready = [0.0] * n_machines
     machine_workload = [0.0] * n_machines
 
-    schedule = []  # list of dicts
+    schedule = []
     op_idx = 0
 
     for pos, job_id in enumerate(os_vec):
         oi = op_counter[job_id]
         op_counter[job_id] += 1
-        alts = jobs[job_id][oi]
         chosen_m = ma_vec[op_idx]
         op_idx += 1
 
-        # 找到加工时间
-        proc = None
-        for alt in alts:
-            if alt[0] == chosen_m:
-                proc = alt
-                break
-        if proc is None:
-            proc = alts[0]
-            chosen_m = proc[0]
+        # O(1) 数组索引替代线性扫描
+        ptime_crisp = crisp_times[job_id][oi][chosen_m]
 
-        _, a, b, c = proc
-        ptime_crisp = (a + 2.0 * b + c) / 4.0
-
-        start = max(job_ready[job_id], machine_ready[chosen_m])
+        start = job_ready[job_id] if job_ready[job_id] > machine_ready[chosen_m] else machine_ready[chosen_m]
         finish = start + ptime_crisp
 
         job_ready[job_id] = finish
@@ -69,7 +59,7 @@ def _build_schedule_info(os_vec, ma_vec, instance):
             "ptime": ptime_crisp,
             "start": start,
             "finish": finish,
-            "alts": alts,
+            "alts": jobs[job_id][oi],
         })
 
     makespan = max(job_ready)
@@ -251,20 +241,13 @@ class RVNS:
         """
         return rng.choice(self.n_operators, p=self.probabilities)
 
-    def apply_local_search(self, os_vec, ma_vec, instance, weight, z, rng):
+    def apply_local_search(self, os_vec, ma_vec, instance, weight, z, rng,
+                            old_mc=None, old_wc=None):
         """
         Apply one local search operator to a solution.
         对单个解应用一次局部搜索。
 
-        Parameters:
-            os_vec, ma_vec: Current solution
-            instance: Problem instance
-            weight: Weight vector for Tchebycheff (lambda_i)
-            z: Reference point
-            rng: Random state
-
-        Returns:
-            new_os, new_ma, success_flag
+        优化：接收已知旧解 crisp 值，消除热路径中重复的 decode 调用。
         """
         op_idx = self.select_operator(rng)
         ls_func = LOCAL_SEARCH_OPERATORS[op_idx]
@@ -272,16 +255,16 @@ class RVNS:
         # Generate neighbor
         new_os, new_ma = ls_func(os_vec, ma_vec, instance, rng)
 
-        # 修复MA合法性（OS变化后）
-        if new_os != os_vec:
-            new_ma = _repair_ma_for_os(new_os, new_ma, instance, rng)
+        # 修复MA合法性（OS变化后MA可能不合法，始终调用）
+        # 注：ls4/ls5可能交换同工件不同工序的位置，此时OS列表不变但MA变化，仍需修复
+        new_ma = _repair_ma_for_os(new_os, new_ma, instance, rng)
 
-        # Evaluate old and new solution using dominance relation
-        _, _, old_mc, old_wc = decode(os_vec, ma_vec, instance)
-        _, _, new_mc, new_wc = decode(new_os, new_ma, instance)
+        # Evaluate: 旧值复用入参，新值用 decode_crisp（零分配）
+        if old_mc is None or old_wc is None:
+            old_mc, old_wc = decode_crisp(os_vec, ma_vec, instance)
+        new_mc, new_wc = decode_crisp(new_os, new_ma, instance)
 
         # Check if new solution dominates old solution
-        # 新解支配旧解：新解在至少一个目标上严格更好，且在所有目标上不差
         success = (new_mc < old_mc and new_wc <= old_wc) or (new_mc <= old_mc and new_wc < old_wc)
 
         # Update memories
@@ -294,10 +277,10 @@ class RVNS:
 
     def _update_memory(self, op_idx, success):
         """
-        Update success/failure memory and recalculate probabilities.
-        更新成功/失败记忆并重新计算选择概率。
+        Update success/failure memory (deferred probability update).
+        仅写入记忆，不立即重算概率。概率由 rvns_generation 代末统一更新，
+        将 O(n_pop) 次 _update_probabilities 合并为 1 次。
         """
-        # 创建当前代的记录
         ns_record = [0] * self.n_operators
         nf_record = [0] * self.n_operators
         if success:
@@ -305,17 +288,13 @@ class RVNS:
         else:
             nf_record[op_idx] = 1
 
-        # 添加到记忆尾部
         self.success_memory.append(ns_record)
         self.failure_memory.append(nf_record)
 
-        # 如果超过长度限制，删除头部记录
         if len(self.success_memory) > self.lp:
             self.success_memory.pop(0)
             self.failure_memory.pop(0)
-
-        # 重新计算概率
-        self._update_probabilities()
+        # 概率更新推迟到 rvns_generation 代末统一调用
 
     def _update_probabilities(self):
         """
@@ -378,20 +357,24 @@ def rvns_generation(population, objectives, weights, instance, z, rng, rvns):
     for i in range(len(population)):
         os_vec, ma_vec = new_pop[i]
         weight = weights[i]
+        old_mc, old_wc = new_obj[i]  # 复用已解码的旧值，避免重复 decode
 
         new_os, new_ma, success = rvns.apply_local_search(
-            os_vec, ma_vec, instance, weight, tuple(z), rng
+            os_vec, ma_vec, instance, weight, tuple(z), rng,
+            old_mc=old_mc, old_wc=old_wc,
         )
 
         if success:
-            # 更新解和目标值
-            _, _, new_mc, new_wc = decode(new_os, new_ma, instance)
+            # 更新解和目标值（crisp-only）
+            new_mc, new_wc = decode_crisp(new_os, new_ma, instance)
             new_pop[i] = (new_os, new_ma)
             new_obj[i] = [new_mc, new_wc]
-            # 更新参考点
             z[0] = min(z[0], new_mc)
             z[1] = min(z[1], new_wc)
             success_count += 1
+
+    # 代末统一更新概率（从 3000 次 → 30 次调用）
+    rvns._update_probabilities()
 
     logger.info("RVNS generation completed: %d/%d solutions improved",
                 success_count, len(population))

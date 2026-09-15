@@ -13,19 +13,28 @@ def dominates(a, b):
 
 
 def non_dominated_sort(front):
-    """Return non-dominated solutions from a list of (f1, f2).
-    从解集中提取非支配解。"""
+    """
+    Return non-dominated (Pareto-optimal) solutions for 2D minimization.
+    二维最小化问题的Kung算法：O(N log N)，仅适用于2目标。
+
+    原理：
+    1. 按 f1 升序排列（makespan从小到大）
+    2. 从左到右扫描，维护已见最小 f2
+    3. 若当前 f2 < 已见最小f2，则该点非支配（前序点f1更小但f2更大）
+    4. 若当前 f2 >= 已见最小f2，则该点被某个前序点支配
+
+    相比原算法O(N²)的逐一比较，扫描阶段仅O(N)。
+    """
     if not front:
         return []
+    # 按第一个目标升序排列
+    sorted_f = sorted(front, key=lambda x: x[0])
     result = []
-    for i, a in enumerate(front):
-        dominated = False
-        for j, b in enumerate(front):
-            if i != j and dominates(b, a):
-                dominated = True
-                break
-        if not dominated:
-            result.append(a)
+    best_f2 = float('inf')
+    for p in sorted_f:
+        if p[1] < best_f2:
+            result.append(p)
+            best_f2 = p[1]
     return result
 
 

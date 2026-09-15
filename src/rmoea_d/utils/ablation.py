@@ -5,6 +5,11 @@
 - 仅 Q-PAS（无 RVNS）
 - 仅 RVNS（无 Q-PAS）
 - 纯 MOEA/D（无 Q-PAS，无 RVNS）
+
+.. deprecated::
+    推荐使用 experiment.py 进行统一实验，单次运行同时产出 benchmark + ablation 数据。
+    此脚本保留用于向后兼容和独立调试。
+    run_all.py v4.0 已统一到 experiment.py，不再调用此脚本。
 """
 
 import argparse
@@ -13,7 +18,7 @@ import os
 import time
 import numpy as np
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 
 # ── 禁止 BLAS/MKL 内部多线程，避免与进程池冲突 ──
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -159,14 +164,22 @@ def _ablation_worker(args_tuple):
 def run_ablation_study(instances, n_pop, max_gen, n_runs, algorithms, output_dir,
                        ql_alpha=0.4, ql_gamma=0.6, ql_epsilon=0.8,
                        ql_actions=None, crossover_rate=0.8, data_dir="data",
-                       n_workers=None):
-    """并行运行完整的消融实验"""
+                       n_workers=None, exp_id=None, timeout_per_task=None):
+    """并行运行完整的消融实验。
+    exp_id: 统一实验ID，贯穿全流程文件名（None则自动生成时间戳）。
+    timeout_per_task: 单个任务最大执行时间（秒），超时后将跳过该任务并记录警告。"""
     if ql_actions is None:
         ql_actions = [5, 10, 15, 20]
     if n_workers is None:
-        n_workers = min(os.cpu_count() or 4, n_runs * len(algorithms))
+        # 优先用环境变量感知外层并发数，否则默认用全部 CPU
+        parent_workers = int(os.environ.get("RMOEA_PARENT_WORKERS", "0"))
+        if parent_workers > 0:
+            total_cpus = os.cpu_count() or 4
+            n_workers = max(1, min(n_runs * len(algorithms), total_cpus // parent_workers))
+        else:
+            n_workers = min(os.cpu_count() or 4, n_runs * len(algorithms))
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = exp_id or datetime.now().strftime("%Y%m%d_%H%M%S")
     all_results = {inst: {algo: [] for algo in algorithms} for inst in instances}
 
     for instance in instances:
@@ -186,12 +199,29 @@ def run_ablation_study(instances, n_pop, max_gen, n_runs, algorithms, output_dir
 
         # ── 并行执行 ──
         completed = 0
+        timed_out = 0
         t0 = time.time()
         milestone_interval = max(1, len(tasks) // 4)  # 每25%报告一次
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = {executor.submit(_ablation_worker, t): t for t in tasks}
             for future in as_completed(futures):
-                inst, algo, run_idx, result = future.result()
+                try:
+                    inst, algo, run_idx, result = future.result(timeout=timeout_per_task)
+                except FutureTimeoutError:
+                    task = futures[future]
+                    timed_out += 1
+                    logger.warning("[%d/%d] Timeout: %s %s run %d > %.0fs, skipping",
+                                   completed + timed_out, len(tasks),
+                                   task[0], task[4], task[11], timeout_per_task)
+                    future.cancel()
+                    continue
+                except Exception as e:
+                    task = futures[future]
+                    timed_out += 1
+                    logger.error("[%d/%d] Error: %s %s run %d: %s, skipping",
+                                 completed + timed_out, len(tasks),
+                                 task[0], task[4], task[11], e)
+                    continue
                 all_results[inst][algo].append(result)
                 completed += 1
                 elapsed = time.time() - t0
@@ -201,22 +231,29 @@ def run_ablation_study(instances, n_pop, max_gen, n_runs, algorithms, output_dir
                 if completed % milestone_interval == 0 or completed == len(tasks):
                     logger.info("Ablation %s: %d/%d tasks [%.0fs]", instance, completed, len(tasks), elapsed)
 
+            if timed_out > 0:
+                logger.warning("Ablation %s: %d/%d tasks timed out or errored", instance, timed_out, len(tasks))
+
             # ── 每完成一个实例就保存中间结果 ──
             save_results(all_results, output_dir, timestamp, instance_tag=instance)
 
     # 保存最终结果 + 生成报告 (多实例一起跑时才写入统一JSON)
     if len(instances) > 1:
         save_results(all_results, output_dir, timestamp)
-    generate_report(all_results, output_dir, timestamp)
+    generate_report(all_results, output_dir, timestamp,
+                    instance=instances[0] if len(instances) == 1 else None)
 
     return all_results
 
 
 def save_results(results, output_dir, timestamp, instance_tag=None):
-    """保存实验结果。instance_tag指定时生成 per-instance JSON"""
-    os.makedirs(output_dir, exist_ok=True)
-    tag = f"_{instance_tag}" if instance_tag else ""
-    filename = os.path.join(output_dir, f"ablation_results{tag}_{timestamp}.json")
+    """保存实验结果。instance_tag指定时写入 output_dir/{instance_tag}/ 子目录"""
+    if instance_tag:
+        out = os.path.join(output_dir, instance_tag)
+    else:
+        out = output_dir
+    os.makedirs(out, exist_ok=True)
+    filename = os.path.join(out, f"ablation_results_{timestamp}.json")
     
     with open(filename, 'w') as f:
         json.dump(results, f, indent=2)
@@ -224,8 +261,8 @@ def save_results(results, output_dir, timestamp, instance_tag=None):
     logger.info(f"Results saved to {filename}")
 
 
-def generate_report(results, output_dir, timestamp):
-    """生成实验报告"""
+def generate_report(results, output_dir, timestamp, instance=None):
+    """生成实验报告。instance指定时写入 output_dir/{instance}/ 子目录"""
     report_lines = [
         "=" * 80,
         "RMOEA/D 消融实验报告",
@@ -281,7 +318,45 @@ def generate_report(results, output_dir, timestamp):
     report_lines.extend([
         "",
         "=" * 80,
-        "三、算法对比",
+        "三、统计检验分析",
+        "=" * 80,
+        "",
+    ])
+
+    for instance in results.keys():
+        avail = [a for a in ["full", "qpas_only", "rvns_only", "moead"] if a in results[instance]]
+        if len(avail) < 2:
+            continue
+        report_lines.append(f"\n【{instance}】")
+        for i, a1 in enumerate(avail):
+            for a2 in avail[i + 1:]:
+                try:
+                    hvs1 = [r["final_hv"] for r in results[instance][a1]]
+                    hvs2 = [r["final_hv"] for r in results[instance][a2]]
+                    if len(hvs1) < 3 or len(hvs2) < 3:
+                        continue
+                    from scipy.stats import wilcoxon
+                    min_len = min(len(hvs1), len(hvs2))
+                    # 若两样本完全相同，se=0 会导致除零 RuntimeWarning，直接返回 p=1.0
+                    if np.allclose(hvs1[:min_len], hvs2[:min_len]):
+                        p_val = 1.0
+                    else:
+                        _, p_val = wilcoxon(hvs1[:min_len], hvs2[:min_len], zero_method='zsplit')
+                    d1 = np.array(hvs1[:min_len])
+                    d2 = np.array(hvs2[:min_len])
+                    pooled = np.sqrt((np.std(d1, ddof=1) ** 2 + np.std(d2, ddof=1) ** 2) / 2)
+                    d = (np.mean(d1) - np.mean(d2)) / pooled if pooled > 0 else 0
+                    sig = "★" if p_val < 0.01 else ("*" if p_val < 0.05 else "ns")
+                    report_lines.append(
+                        f"  {a1} vs {a2}: p={p:.4f} {sig}, Cohen's d={d:+.3f}"
+                    )
+                except Exception:
+                    pass
+
+    report_lines.extend([
+        "",
+        "=" * 80,
+        "四、算法对比",
         "=" * 80,
         "",
     ])
@@ -306,7 +381,7 @@ def generate_report(results, output_dir, timestamp):
     report_lines.extend([
         "",
         "=" * 80,
-        "四、结论",
+        "五、结论",
         "=" * 80,
         ""
     ])
@@ -325,12 +400,42 @@ def generate_report(results, output_dir, timestamp):
     if best_algo != "N/A":
         report_lines.append(f"最佳算法: {best_algo}")
         report_lines.append(f"平均 HV: {np.mean(valid_algos[best_algo]):.4f}")
+
+    # 全局统计检验 (pooled across all instances)
+    report_lines.append("")
+    report_lines.append("全局统计检验 (pooled across instances):")
+    avail_global = sorted(valid_algos.keys())
+    for i, a1 in enumerate(avail_global):
+        for a2 in avail_global[i + 1:]:
+            try:
+                hvs1 = valid_algos[a1]
+                hvs2 = valid_algos[a2]
+                if len(hvs1) < 3 or len(hvs2) < 3:
+                    continue
+                from scipy.stats import wilcoxon
+                min_len = min(len(hvs1), len(hvs2))
+                # 若两样本完全相同，se=0 会导致除零 RuntimeWarning，直接返回 p=1.0
+                if np.allclose(hvs1[:min_len], hvs2[:min_len]):
+                    p_val = 1.0
+                else:
+                    _, p_val = wilcoxon(hvs1[:min_len], hvs2[:min_len], zero_method='zsplit')
+                d1 = np.array(hvs1[:min_len])
+                d2 = np.array(hvs2[:min_len])
+                pooled = np.sqrt((np.std(d1, ddof=1) ** 2 + np.std(d2, ddof=1) ** 2) / 2)
+                d = (np.mean(d1) - np.mean(d2)) / pooled if pooled > 0 else 0
+                sig = "★" if p_val < 0.01 else ("*" if p_val < 0.05 else "ns")
+                report_lines.append(
+                    f"  {a1} vs {a2}: p={p_val:.4f} {sig}, Cohen's d={d:+.3f}")
+            except Exception:
+                pass
     report_lines.append("")
     
     report = "\n".join(report_lines)
     
     # 保存报告
-    report_path = os.path.join(output_dir, f"ablation_report_{timestamp}.txt")
+    report_out = os.path.join(output_dir, instance) if instance else output_dir
+    os.makedirs(report_out, exist_ok=True)
+    report_path = os.path.join(report_out, f"ablation_report_{timestamp}.txt")
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report)
     
@@ -366,6 +471,8 @@ def main():
     parser.add_argument("--data_dir", type=str, default="data", help="Data directory")
     parser.add_argument("--n_workers", type=int, default=None,
                         help="Parallel workers (default: auto=min(cpu_count, n_runs*4))")
+    parser.add_argument("--timeout_per_task", type=float, default=None,
+                        help="Per-task timeout in seconds (None = no limit)")
     
     args = parser.parse_args()
     
@@ -388,6 +495,7 @@ def main():
         crossover_rate=args.crossover_rate,
         data_dir=args.data_dir,
         n_workers=args.n_workers,
+        timeout_per_task=args.timeout_per_task,
     )
 
     # 日志: 消融实验完成；可视化由 ablation_visualization.py 统一负责

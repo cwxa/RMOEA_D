@@ -9,6 +9,13 @@ RMOEA/D主算法：集成Q-learning参数自适应与MOEA/D演化框架。
 4. 维护精英存档，输出最终Pareto前沿
 """
 
+# ── 禁止 BLAS/MKL 内部多线程，避免与 ProcessPoolExecutor 冲突 ──
+import os as _os
+_os.environ["OMP_NUM_THREADS"] = "1"
+_os.environ["MKL_NUM_THREADS"] = "1"
+_os.environ["OPENBLAS_NUM_THREADS"] = "1"
+_os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import numpy as np
 import time
 import logging
@@ -17,7 +24,7 @@ import os
 
 from .core.instance import load_instance
 from .core.operators import init_mix3
-from .core.encoding import decode, decode_with_schedule
+from .core.encoding import decode, decode_with_schedule, decode_crisp
 from .core.moead import generate_weights, compute_neighbors, moead_generation
 from .core.qlearning import QLearningPAS
 from .core.rvns import RVNS, rvns_generation
@@ -47,6 +54,9 @@ class RMOEAD:
         ql_actions=None,
         enable_rvns=True,
         fixed_T=None,
+        timeout=None,
+        algorithm_name="RMOEA/D",
+        algo_dir_name="RMOEA_D",
     ):
         """
         Initialize RMOEA/D solver.
@@ -65,6 +75,9 @@ class RMOEAD:
             ql_actions: List of candidate T values
             enable_rvns: Whether to enable RVNS local search
             fixed_T: Fixed neighborhood size (if None, use Q-learning)
+            timeout: Maximum wall-clock time in seconds (None = no limit)
+            algorithm_name: Algorithm name for result metadata
+            algo_dir_name: Directory name for saved results
         """
         self.instance_name = instance_name
         self.n_pop = n_pop
@@ -74,6 +87,9 @@ class RMOEAD:
         self.data_dir = data_dir
         self.enable_rvns = enable_rvns
         self.fixed_T = fixed_T
+        self.timeout = timeout
+        self.algorithm_name = algorithm_name
+        self.algo_dir_name = algo_dir_name
 
         # Q-learning parameters
         self.ql_alpha = ql_alpha
@@ -92,27 +108,26 @@ class RMOEAD:
         self.archive = []  # Elite archive: list of (os, ma, obj)
         self.history = []  # Generation history for analysis
 
-        logger.info("RMOEA/D | %s | Np=%d G=%d | %s | %s",
-                    instance_name, n_pop, max_gen,
+        logger.info("%s | %s | Np=%d G=%d | %s | %s",
+                    algorithm_name, instance_name, n_pop, max_gen,
                     f"QL(T={self.ql_actions})" if fixed_T is None else f"FixedT={fixed_T}",
                     "RVNS" if enable_rvns else "noRVNS")
         logger.debug("Seed=%d CR=%.2f alpha=%.2f gamma=%.2f epsilon=%.2f",
                      seed, crossover_rate, ql_alpha, ql_gamma, ql_epsilon)
 
     def _init_population(self):
-        """Initialize population using MIX3 strategy."""
+        """Initialize population using MIX3 strategy.
+        初始化种群：随机生成 → crisp decode 目标值（热路径零分配）。"""
         logger.debug("Initializing population with MIX3 strategy...")
         start = time.perf_counter()
         pop = init_mix3(self.instance, self.n_pop, self.rng)
         objectives = []
-        fuzzy_objs = []  # Store full fuzzy numbers for final output
         for os_vec, ma_vec in pop:
-            m, w, mc, wc = decode(os_vec, ma_vec, self.instance)
+            mc, wc = decode_crisp(os_vec, ma_vec, self.instance)
             objectives.append((mc, wc))
-            fuzzy_objs.append((m, w))
         elapsed = time.perf_counter() - start
         logger.debug("Population initialized: %d individuals in %.4f s", len(pop), elapsed)
-        return pop, objectives, fuzzy_objs
+        return pop, objectives
 
     def _compute_pf(self, objectives):
         """Extract non-dominated front from current objectives."""
@@ -161,16 +176,19 @@ class RMOEAD:
         self.weights = generate_weights(self.n_pop)
         logger.debug("Weight vectors generated: %d vectors", len(self.weights))
 
-        # Initialize Q-learning
-        self.ql = QLearningPAS(
-            alpha=self.ql_alpha,
-            gamma=self.ql_gamma,
-            epsilon=self.ql_epsilon,
-            actions=self.ql_actions,
-        )
+        # Initialize Q-learning (only when adaptive T is needed)
+        if self.fixed_T is None:
+            self.ql = QLearningPAS(
+                alpha=self.ql_alpha,
+                gamma=self.ql_gamma,
+                epsilon=self.ql_epsilon,
+                actions=self.ql_actions,
+            )
+        else:
+            self.ql = None
 
         # Initialize population
-        population, objectives, fuzzy_objectives = self._init_population()
+        population, objectives = self._init_population()
 
         # Initialize reference point (crisp values for MOEA/D evolution)
         # 参考点使用清晰值，用于MOEA/D的标量化函数
@@ -188,6 +206,12 @@ class RMOEAD:
         # Main loop
         for gen in range(1, self.max_gen + 1):
             gen_start = time.perf_counter()
+
+            # ── 超时保护：每代开始前检查是否超过总时限 ──
+            if self.timeout is not None and (gen_start - total_start) > self.timeout:
+                logger.warning("Timeout reached at generation %d/%d (%.1fs > %.1fs), stopping early",
+                               gen - 1, self.max_gen, gen_start - total_start, self.timeout)
+                break
 
             # Step 1: Apply RVNS to each solution (论文 Algorithm 1 line 4)
             if self.enable_rvns:
@@ -318,7 +342,7 @@ class RMOEAD:
         ]
 
         results = {
-            "algorithm": "RMOEA/D",
+            "algorithm": self.algorithm_name,
             "instance": self.instance_name,
             "n_pop": self.n_pop,
             "max_gen": self.max_gen,
@@ -328,6 +352,8 @@ class RMOEAD:
             "fuzzy_pf": named_fuzzy_pf,
             "final_hv": final_hv,
             "total_time": total_time,
+            "timed_out": self.timeout is not None and total_time > self.timeout,
+            "timeout": self.timeout,
             "history": self.history,
             "q_table": self.ql.q_table.tolist() if self.ql else None,
             "rvns_final_probs": self.rvns.get_probabilities() if self.rvns else None,
@@ -341,18 +367,27 @@ class RMOEAD:
 
     def save_results(self, results, output_dir="results"):
         """Save results to JSON file with grouped directory structure.
-        按实例和算法分组存储结果文件：results/Mk01/RMOEA_D/xxx.json
+        按实例和算法分组存储结果文件：results/benchmark/<instance>/RMOEA_D/xxx.json
         同时自动生成甘特图到 charts/schedules/<instance>/
         """
-        # Grouped directory: results/<instance>/<algorithm>/
-        algo_dir = os.path.join(output_dir, self.instance_name, "RMOEA_D")
+        # Grouped directory: results/benchmark/<instance>/<algorithm>/
+        algo_dir = os.path.join(output_dir, "benchmark", self.instance_name, self.algo_dir_name)
         os.makedirs(algo_dir, exist_ok=True)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"{self.instance_name}_RMOEA_D_Np{self.n_pop}_G{self.max_gen}_{timestamp}.json"
+        filename = f"{self.instance_name}_{self.algo_dir_name}_Np{self.n_pop}_G{self.max_gen}_{timestamp}.json"
         filepath = os.path.join(algo_dir, filename)
 
+        def _json_default(obj):
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
+            json.dump(results, f, indent=2, ensure_ascii=False, default=_json_default)
 
         logger.debug("Results saved to: %s", filepath)
 

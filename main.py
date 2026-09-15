@@ -76,6 +76,10 @@ def parse_args():
         "--log_dir", type=str, default="logs",
         help="Log directory (default: logs)"
     )
+    opt_parser.add_argument(
+        "--timeout", type=float, default=None,
+        help="Maximum wall-clock time in seconds (None = no limit)"
+    )
     
     # Analyze command
     subparsers.add_parser('analyze', help='Analyze experiment results')
@@ -121,9 +125,13 @@ def parse_args():
         "--output_dir", type=str, default="results",
         help="Output directory for results (default: results)"
     )
+    bench_parser.add_argument(
+        "--timeout_per_task", type=float, default=None,
+        help="Per-task timeout in seconds (None = no limit)"
+    )
     
     # Ablation command
-    ablation_parser = subparsers.add_parser('ablation', help='Run ablation study')
+    ablation_parser = subparsers.add_parser('ablation', help='Run ablation study (via unified experiment)')
     ablation_parser.add_argument(
         "--instances", type=str, nargs="+", default=["Mk01", "Mk02"],
         help="Instance names (default: Mk01 Mk02)"
@@ -133,51 +141,32 @@ def parse_args():
         help="Population size (default: 100)"
     )
     ablation_parser.add_argument(
-        "--max_gen", type=int, default=100,
-        help="Maximum generations (default: 100)"
+        "--max_gen", type=int, default=200,
+        help="Maximum generations (default: 200)"
     )
     ablation_parser.add_argument(
-        "--n_runs", type=int, default=3,
-        help="Number of repetitions per configuration (default: 3)"
+        "--n_runs", type=int, default=30,
+        help="Number of repetitions per configuration (default: 30)"
     )
+    ablation_parser.add_argument("--seed", type=int, default=42, help="随机种子")
+    ablation_parser.add_argument("--crossover_rate", type=float, default=0.8)
+    ablation_parser.add_argument("--fixed_T", type=int, default=10)
     ablation_parser.add_argument(
-        "--algorithms", type=str, nargs="+", 
-        default=["full", "qpas_only", "rvns_only", "moead"],
-        choices=["full", "qpas_only", "rvns_only", "moead"],
-        help="Algorithms to compare (default: all)"
-    )
-    ablation_parser.add_argument(
-        "--output_dir", type=str, default="results/ablation",
-        help="Output directory for results (default: results/ablation)"
-    )
-    ablation_parser.add_argument(
-        "--ql_alpha", type=float, default=0.4,
-        help="Q-learning learning rate (default: 0.4)"
-    )
-    ablation_parser.add_argument(
-        "--ql_gamma", type=float, default=0.6,
-        help="Q-learning discount factor (default: 0.6)"
-    )
-    ablation_parser.add_argument(
-        "--ql_epsilon", type=float, default=0.8,
-        help="Q-learning epsilon (default: 0.8)"
-    )
-    ablation_parser.add_argument(
-        "--ql_actions", type=int, nargs="+", default=[5, 10, 15, 20],
-        help="Q-learning candidate T values (default: 5 10 15 20)"
-    )
-    ablation_parser.add_argument(
-        "--crossover_rate", type=float, default=0.8,
-        help="Crossover rate (default: 0.8)"
+        "--output_dir", type=str, default="results",
+        help="Output directory for results (default: results)"
     )
     ablation_parser.add_argument(
         "--data_dir", type=str, default="data",
         help="Data directory containing .fjs files (default: data)"
     )
+    ablation_parser.add_argument(
+        "--timeout_per_task", type=float, default=None,
+        help="Per-task timeout in seconds (None = no limit)"
+    )
     
-    # Run-all command (一键并行全流程)
+    # Run-all command (一键并行全流程 — unified experiment)
     runall_parser = subparsers.add_parser(
-        'run_all', help='一键并行: benchmark + ablation + visualization'
+        'run_all', help='一键并行: 统一实验 (benchmark+ablation 一次产出) + visualization'
     )
     runall_parser.add_argument(
         "--instances", type=str, nargs="+",
@@ -187,22 +176,21 @@ def parse_args():
     )
     runall_parser.add_argument("--n_pop", type=int, default=100)
     runall_parser.add_argument("--max_gen", type=int, default=200)
-    runall_parser.add_argument("--max_gen_ablation", type=int, default=100)
-    runall_parser.add_argument("--n_runs", type=int, default=3)
-    runall_parser.add_argument("--n_runs_ablation", type=int, default=3)
+    runall_parser.add_argument("--n_runs", type=int, default=30,
+                               help="每实例独立运行次数 (每个seed同时产出4种算法变体)")
     runall_parser.add_argument("--seed", type=int, default=42)
     runall_parser.add_argument("--crossover_rate", type=float, default=0.8)
     runall_parser.add_argument("--fixed_T", type=int, default=10)
     runall_parser.add_argument("--data_dir", type=str, default="data")
     runall_parser.add_argument("--output_dir", type=str, default="results")
-    runall_parser.add_argument("--skip_benchmark", action="store_true")
-    runall_parser.add_argument("--skip_ablation", action="store_true")
     runall_parser.add_argument("--skip_viz", action="store_true")
     runall_parser.add_argument("--skip_gantt", action="store_true")
     runall_parser.add_argument("--max_workers", type=int, default=4,
                                help="外层并行进程数 (MK实例间, 默认4)")
     runall_parser.add_argument("--n_workers_inner", type=int, default=None,
                                help="内层并行进程数 (n_runs间, 默认auto)")
+    runall_parser.add_argument("--timeout_per_task", type=float, default=None,
+                               help="Per-task timeout in seconds (None = no limit)")
     
     return parser.parse_args()
 
@@ -225,6 +213,7 @@ def run_optimize(args):
         ql_gamma=args.ql_gamma,
         ql_epsilon=args.ql_epsilon,
         ql_actions=args.ql_actions,
+        timeout=args.timeout,
     )
     
     results = solver.solve()
@@ -262,11 +251,10 @@ def run_visualize(args):
 
 
 def run_benchmark(args):
-    """Run benchmark comparison with full parameter support."""
-    from rmoea_d.utils.benchmark import main as benchmark_main
+    """Run benchmark comparison (RMOEA/D vs MOEA/D) via unified experiment."""
+    from rmoea_d.utils.experiment import main as experiment_main
 
-    # Pass args directly via sys.argv (benchmark module uses argparse internally)
-    sys.argv = ['benchmark.py',
+    sys.argv = ['experiment.py',
                 '--instances'] + args.instances + \
                ['--n_pop', str(args.n_pop),
                 '--max_gen', str(args.max_gen),
@@ -275,42 +263,46 @@ def run_benchmark(args):
                 '--crossover_rate', str(args.crossover_rate),
                 '--fixed_T', str(args.fixed_T),
                 '--data_dir', args.data_dir,
-                '--output_dir', args.output_dir]
-    benchmark_main()
+                '--output_dir', args.output_dir,
+                '--study', 'benchmark']
+    if args.timeout_per_task is not None:
+        sys.argv.extend(['--timeout_per_task', str(args.timeout_per_task)])
+    experiment_main()
 
 
 def run_ablation(args):
-    """Run ablation study."""
-    from rmoea_d.utils.ablation import main as ablation_main
-    
-    # Convert args to the format expected by ablation.py
-    import sys
-    sys.argv = ['ablation.py', '--instances'] + args.instances + \
-               ['--n_pop', str(args.n_pop), '--max_gen', str(args.max_gen), '--n_runs', str(args.n_runs)] + \
-               ['--algorithms'] + args.algorithms + \
-               ['--output_dir', args.output_dir] + \
-               ['--ql_alpha', str(args.ql_alpha), '--ql_gamma', str(args.ql_gamma), '--ql_epsilon', str(args.ql_epsilon)] + \
-               ['--ql_actions'] + [str(a) for a in args.ql_actions] + \
-               ['--crossover_rate', str(args.crossover_rate), '--data_dir', args.data_dir]
-    ablation_main()
+    """Run ablation study via unified experiment."""
+    from rmoea_d.utils.experiment import main as experiment_main
+
+    sys.argv = ['experiment.py',
+                '--instances'] + args.instances + \
+               ['--n_pop', str(args.n_pop),
+                '--max_gen', str(args.max_gen),
+                '--n_runs', str(args.n_runs),
+                '--seed', str(args.seed),
+                '--crossover_rate', str(args.crossover_rate),
+                '--fixed_T', str(args.fixed_T),
+                '--data_dir', args.data_dir,
+                '--output_dir', args.output_dir,
+                '--study', 'ablation']
+    if args.timeout_per_task is not None:
+        sys.argv.extend(['--timeout_per_task', str(args.timeout_per_task)])
+    experiment_main()
 
 
 def run_run_all(args):
-    """一键并行全流程: benchmark + ablation + visualization."""
+    """一键并行全流程: 统一实验 (benchmark+ablation 一次产出) + visualization."""
     import sys
     argv = ['run_all.py', '--instances'] + args.instances + \
            ['--n_pop', str(args.n_pop), '--max_gen', str(args.max_gen),
-            '--max_gen_ablation', str(args.max_gen_ablation),
-            '--n_runs', str(args.n_runs), '--n_runs_ablation', str(args.n_runs_ablation),
+            '--n_runs', str(args.n_runs),
             '--seed', str(args.seed), '--crossover_rate', str(args.crossover_rate),
             '--fixed_T', str(args.fixed_T), '--data_dir', args.data_dir,
             '--output_dir', args.output_dir, '--max_workers', str(args.max_workers)]
     if args.n_workers_inner is not None:
         argv.extend(['--n_workers_inner', str(args.n_workers_inner)])
-    if args.skip_benchmark:
-        argv.append('--skip_benchmark')
-    if args.skip_ablation:
-        argv.append('--skip_ablation')
+    if args.timeout_per_task is not None:
+        argv.extend(['--timeout_per_task', str(args.timeout_per_task)])
     if args.skip_viz:
         argv.append('--skip_viz')
     if getattr(args, 'skip_gantt', False):

@@ -169,18 +169,17 @@ def _get_op_index(os_vec, idx):
 def _repair_ma_for_os(os_vec, ma_vec, instance, rng):
     """Repair MA to ensure each machine is valid for its corresponding operation in OS.
     修复MA向量：确保每个位置的机器对应该位置工序的候选机器集。
-    当OS发生变化（交叉/变异）而MA未同步变化时，需要调用此函数。
+    使用预计算的 valid_machines 集合，O(1) 查找替代 O(n_alts) 遍历。
     """
     ma_vec = ma_vec.copy()
     op_counter = [0] * instance["n_jobs"]
+    valid_machines = instance["valid_machines"]
     for idx, job_id in enumerate(os_vec):
         oi = op_counter[job_id]
         op_counter[job_id] += 1
-        alts = instance["jobs"][job_id][oi]
-        valid_machines = [alt[0] for alt in alts]
-        if ma_vec[idx] not in valid_machines:
-            # Pick a random valid machine
-            ma_vec[idx] = int(rng.choice(valid_machines))
+        if ma_vec[idx] not in valid_machines[job_id][oi]:
+            # 随机选一个合法机器（集合随机选择比列表重建快）
+            ma_vec[idx] = rng.choice(list(valid_machines[job_id][oi]))
     return ma_vec
 
 

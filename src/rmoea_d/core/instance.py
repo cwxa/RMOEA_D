@@ -46,11 +46,37 @@ def parse_fjs(text, seed=42):
         jobs.append(operations)
 
     total_ops = sum(len(job) for job in jobs)
+
+    # ── 预计算 crisp 加工时间表，避免热路径重复 (a+2b+c)/4 运算 ──
+    # 展平为连续数组：crisp_times[job_idx][op_idx][machine_id] = crisp time (None if invalid)
+    # 用 list.index 替代 dict.get，消除哈希开销 (~580k calls per 30 gens)
+    crisp_times = []
+    for job in jobs:
+        job_table = []
+        for op in job:
+            op_table = [None] * n_machines
+            for alt in op:
+                m, a, b, c = alt
+                op_table[m] = (a + 2.0 * b + c) / 4.0
+            job_table.append(op_table)
+        crisp_times.append(job_table)
+
+    # ── 预计算每道工序的合法机器集合，供 _repair_ma_for_os O(1) 校验 ──
+    # valid_machines[job_idx][op_idx] = set of valid machine IDs
+    valid_machines = []
+    for job in jobs:
+        job_valid = []
+        for op in job:
+            job_valid.append({alt[0] for alt in op})
+        valid_machines.append(job_valid)
+
     return {
         "n_jobs": n_jobs,
         "n_machines": n_machines,
         "jobs": jobs,
         "total_ops": total_ops,
+        "crisp_times": crisp_times,      # 供 decode_crisp() 零分配解码
+        "valid_machines": valid_machines, # 供 _repair_ma_for_os O(1) 校验
     }
 
 

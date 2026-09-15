@@ -3,6 +3,11 @@
 Benchmark script: RMOEA/D vs MOEA/D comparison on Brandimarte instances.
 对比实验脚本：支持多次独立运行、统计分析和三角模糊数报告。
 
+.. deprecated::
+    推荐使用 experiment.py 进行统一实验，单次运行同时产出 benchmark + ablation 数据。
+    此脚本保留用于向后兼容和独立调试。
+    run_all.py v4.0 已统一到 experiment.py，不再调用此脚本。
+
 功能：
 - 多轮独立运行 (--n_runs)，统计 mean ± std
 - Friedman检验 + Wilcoxon符号秩检验
@@ -17,7 +22,7 @@ import time
 import math
 import numpy as np
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 import itertools
 from scipy.stats import friedmanchisquare as _friedman_scipy
 
@@ -82,6 +87,10 @@ def wilcoxon_test(sample1, sample2):
     """
     try:
         from scipy.stats import wilcoxon
+        import numpy as np
+        # 若两样本完全相同，se=0 会导致除零 RuntimeWarning，直接返回 p=1.0
+        if np.allclose(sample1, sample2):
+            return 0.0, 1.0
         stat, p = wilcoxon(sample1, sample2)
         return stat, p
     except ImportError:
@@ -110,6 +119,60 @@ def wilcoxon_test(sample1, sample2):
         else:
             p = 1.0
         return W, p
+
+
+def cohens_d(sample1, sample2):
+    """Cohen's d 效应量 (pooled SD), 衡量两组样本的差异幅度。
+    |d| < 0.2: negligible; 0.2-0.5: small; 0.5-0.8: medium; >0.8: large."""
+    s1, s2 = np.array(sample1, dtype=float), np.array(sample2, dtype=float)
+    n1, n2 = len(s1), len(s2)
+    if n1 < 2 or n2 < 2:
+        return 0.0
+    v1, v2 = np.var(s1, ddof=1), np.var(s2, ddof=1)
+    pooled_sd = np.sqrt(((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2))
+    if pooled_sd < 1e-12:
+        return 0.0
+    return (np.mean(s1) - np.mean(s2)) / pooled_sd
+
+
+def _wilcoxon_multi_metric(agg_results, metric_key):
+    """对指定 metric 做 per-instance + overall Wilcoxon 检验。
+    metric_key: '_hv_all' | '_bm_all' | '_bw_all' 等"""
+    instances = sorted(agg_results.keys())
+    wilcoxon_per = {}
+    all_r, all_m = [], []
+    for inst in instances:
+        hv_r = np.array(agg_results[inst]["rmoea_d"][metric_key])
+        hv_m = np.array(agg_results[inst]["moea_d"][metric_key])
+        all_r.extend(hv_r.tolist())
+        all_m.extend(hv_m.tolist())
+        try:
+            w_stat, w_p = wilcoxon_test(hv_r, hv_m)
+            d = cohens_d(hv_r, hv_m)
+            wilcoxon_per[inst] = {"R+": float(w_stat), "p_value": float(w_p),
+                                   "cohens_d": float(d),
+                                   "sig": _sig_level(w_p)}
+        except Exception:
+            wilcoxon_per[inst] = {"R+": 0, "p_value": 1, "cohens_d": 0.0, "sig": "ns"}
+    try:
+        w_stat_total, w_p_total = wilcoxon_test(all_r, all_m)
+        d_total = cohens_d(all_r, all_m)
+    except Exception:
+        w_stat_total, w_p_total, d_total = 0, 1, 0.0
+    return {
+        "per_instance": wilcoxon_per,
+        "overall": {"statistic": float(w_stat_total), "p_value": float(w_p_total),
+                     "cohens_d": float(d_total),
+                     "significant": "yes" if w_p_total < 0.05 else "no"},
+    }
+
+
+def _sig_level(p):
+    """p值转显著性标记 (ASCII星号，兼容Windows终端)"""
+    if p < 0.001: return "***"
+    if p < 0.01:  return "**"
+    if p < 0.05:  return "*"
+    return "n.s."
 
 
 # ═══════════════════════════════════════════════════════════
@@ -214,10 +277,20 @@ def _run_single_worker(args_tuple):
 
 
 def run_multi(instances, n_pop, max_gen, crossover_rate, base_seed, fixed_T,
-              data_dir, n_runs, output_dir, n_workers=None):
-    """多轮独立运行（并行版），返回聚合统计结果"""
+              data_dir, n_runs, output_dir, n_workers=None, timeout_per_task=None):
+    """多轮独立运行（并行版），返回聚合统计结果
+    
+    Parameters:
+        timeout_per_task: 单个任务最大执行时间（秒），超时后将跳过该任务并记录警告
+    """
     if n_workers is None:
-        n_workers = min(os.cpu_count() or 4, n_runs)
+        # 优先用环境变量感知外层并发数，否则默认用全部 CPU
+        parent_workers = int(os.environ.get("RMOEA_PARENT_WORKERS", "0"))
+        if parent_workers > 0:
+            total_cpus = os.cpu_count() or 4
+            n_workers = max(1, min(n_runs, total_cpus // parent_workers))
+        else:
+            n_workers = min(os.cpu_count() or 4, n_runs)
 
     # ── 生成所有任务 (instance, seed) 对 ──
     tasks = []
@@ -232,13 +305,28 @@ def run_multi(instances, n_pop, max_gen, crossover_rate, base_seed, fixed_T,
     # ── 并行执行 ──
     all_runs = {inst: {"rmoea_d": [], "moea_d": [], "_full_results_r": []} for inst in instances}
     completed = 0
+    timed_out = 0
     t0 = time.time()
     milestone_interval = max(1, len(tasks) // 5)  # 每20%报告一次
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = {executor.submit(_run_single_worker, t): t for t in tasks}
         for future in as_completed(futures):
-            inst, seed, comp = future.result()
+            try:
+                inst, seed, comp = future.result(timeout=timeout_per_task)
+            except FutureTimeoutError:
+                task = futures[future]
+                timed_out += 1
+                logger.warning("[%d/%d] Timeout: %s seed=%s > %.0fs, skipping",
+                               completed + timed_out, len(tasks), task[0], task[5], timeout_per_task)
+                future.cancel()
+                continue
+            except Exception as e:
+                task = futures[future]
+                timed_out += 1
+                logger.error("[%d/%d] Error: %s seed=%s: %s, skipping",
+                             completed + timed_out, len(tasks), task[0], task[5], e)
+                continue
             all_runs[inst]["rmoea_d"].append(comp["rmoea_d"])
             all_runs[inst]["moea_d"].append(comp["moea_d"])
             # 保留完整 solve() 结果（含 schedules 调度数据，用于甘特图生成）
@@ -250,6 +338,9 @@ def run_multi(instances, n_pop, max_gen, crossover_rate, base_seed, fixed_T,
                         comp['rmoea_d']['final_hv'], comp['moea_d']['final_hv'], elapsed)
             if completed % milestone_interval == 0 or completed == len(tasks):
                 logger.info("Benchmark %d/%d tasks [%.0fs]", completed, len(tasks), elapsed)
+
+    if timed_out > 0:
+        logger.warning("%d/%d tasks timed out or errored", timed_out, len(tasks))
 
     # ── 聚合统计 (mean ± std) ──
     agg_results = {}
@@ -317,15 +408,13 @@ def run_multi(instances, n_pop, max_gen, crossover_rate, base_seed, fixed_T,
 # ═══════════════════════════════════════════════════════════
 
 def run_statistical_tests(agg_results):
-    """执行Friedman和Wilcoxon检验（论文表4、表8）"""
+    """执行完整的统计检验：Friedman + 多指标 Wilcoxon + 效应量 (Cohen's d)。
+    覆盖 HV、Makespan、Workload 三个核心指标。"""
     instances = sorted(agg_results.keys())
-    n_inst = len(instances)
-    n_algo = 2  # RMOEA/D vs MOEA/D
 
-    # ── Friedman Test (基于每个实例各算法多次运行的HV均值) ──
+    # ── Friedman Test (基于每实例各算法 HV 均值) ──
     rmoea_hv_means = [agg_results[i]["rmoea_d"]["hv_mean"] for i in instances]
     moea_hv_means = [agg_results[i]["moea_d"]["hv_mean"] for i in instances]
-
     try:
         stat_f, p_f = friedman_test(rmoea_hv_means, moea_hv_means)
         friedman_valid = True
@@ -333,28 +422,26 @@ def run_statistical_tests(agg_results):
         stat_f, p_f = 0, 1
         friedman_valid = False
 
-    # ── Wilcoxon Signed-Rank Test (每个实例的多次HV配对) ──
-    wilcoxon_results = {}
-    for inst in instances:
-        hv_r = np.array(agg_results[inst]["rmoea_d"]["_hv_all"])
-        hv_m = np.array(agg_results[inst]["moea_d"]["_hv_all"])
-        try:
-            w_stat, w_p = wilcoxon_test(hv_r, hv_m)
-            wilcoxon_results[inst] = {"R+": float(w_stat), "p_value": float(w_p),
-                                        "sig": "yes" if w_p < 0.05 else "no"}
-        except Exception:
-            wilcoxon_results[inst] = {"R+": 0, "p_value": 1, "sig": "no"}
+    # ── 多指标 Wilcoxon + 效应量 ──
+    wilcoxon_hv = _wilcoxon_multi_metric(agg_results, "_hv_all")
+    wilcoxon_ms = _wilcoxon_multi_metric(agg_results, "_bm_all")
+    wilcoxon_wl = _wilcoxon_multi_metric(agg_results, "_bw_all")
 
-    # ── 总Wilcoxon (所有实例的HV值合并) ──
-    all_hv_r = []
-    all_hv_m = []
-    for inst in instances:
-        all_hv_r.extend(agg_results[inst]["rmoea_d"]["_hv_all"])
-        all_hv_m.extend(agg_results[inst]["moea_d"]["_hv_all"])
-    try:
-        w_stat_total, w_p_total = wilcoxon_test(all_hv_r, all_hv_m)
-    except Exception:
-        w_stat_total, w_p_total = 0, 1
+    # ── 跨实例平均效应量 ──
+    agg_effect = {}
+    for metric_name, w_data in [("HV", wilcoxon_hv), ("Makespan", wilcoxon_ms),
+                                  ("Workload", wilcoxon_wl)]:
+        ds = [d["cohens_d"] for d in w_data["per_instance"].values()]
+        agg_effect[metric_name] = {
+            "mean_d": float(np.mean(ds)) if ds else 0.0,
+            "median_d": float(np.median(ds)) if ds else 0.0,
+            "min_d": float(np.min(ds)) if ds else 0.0,
+            "max_d": float(np.max(ds)) if ds else 0.0,
+            "n_large": sum(1 for d in ds if abs(d) > 0.8),
+            "n_medium": sum(1 for d in ds if 0.5 < abs(d) <= 0.8),
+            "n_small": sum(1 for d in ds if 0.2 < abs(d) <= 0.5),
+            "n_negligible": sum(1 for d in ds if abs(d) <= 0.2),
+        }
 
     return {
         "friedman": {
@@ -362,12 +449,10 @@ def run_statistical_tests(agg_results):
             "p_value": float(p_f),
             "significant": "yes" if p_f < 0.05 else "no",
         },
-        "wilcoxon_per_instance": wilcoxon_results,
-        "wilcoxon_overall": {
-            "statistic": float(w_stat_total),
-            "p_value": float(w_p_total),
-            "significant": "yes" if w_p_total < 0.05 else "no",
-        },
+        "wilcoxon_hv": wilcoxon_hv,
+        "wilcoxon_makespan": wilcoxon_ms,
+        "wilcoxon_workload": wilcoxon_wl,
+        "effect_size_summary": agg_effect,
     }
 
 
@@ -376,49 +461,158 @@ def run_statistical_tests(agg_results):
 # ═══════════════════════════════════════════════════════════
 
 def print_report(agg_results, stats_tests):
-    """打印完整实验报告 — 详细表格写入日志文件，关键摘要打印到控制台"""
+    """输出实验报告：详细表格 → logger.debug (日志文件)，关键摘要 + 统计 → logger.info (控制台可见)。
+
+    控制台输出结构：
+      1. 整体摘要 (avgHV + 胜率)
+      2. Friedman + Overall Wilcoxon 显著性
+      3. Per-instance 快速一览表 (HV + Makespan + 显著性)
+      4. 效应量汇总 (Cohen's d 分布)
+    """
     instances = sorted(agg_results.keys())
     first = agg_results[instances[0]]
+    n_runs = first.get('n_runs', 0)
 
-    # ── 详细报告 → logger.debug（文件） ──
+    # ═══════════════════════════════════════════════════════
+    # 控制台可见摘要 (logger.info)
+    # ═══════════════════════════════════════════════════════
+
+    avg_hv_r = np.mean([agg_results[i]["rmoea_d"]["hv_mean"] for i in instances])
+    avg_hv_m = np.mean([agg_results[i]["moea_d"]["hv_mean"] for i in instances])
+    n_better = sum(1 for i in instances
+                   if agg_results[i]["rmoea_d"]["hv_mean"] > agg_results[i]["moea_d"]["hv_mean"])
+
+    try:
+        logger.info("")
+        logger.info("=" * 78)
+        logger.info("  RMOEA/D vs MOEA/D -- BENCHMARK STATISTICAL REPORT")
+        logger.info("-" * 78)
+        logger.info("  Config: Np=%d, Gen=%d, Runs=%d, Instances=%d",
+                    first['n_pop'], first['max_gen'], n_runs, len(instances))
+        logger.info("-" * 78)
+        logger.info("  HV Summary")
+        logger.info("    RMOEA/D  avgHV = %.4f", avg_hv_r)
+        logger.info("    MOEA/D   avgHV = %.4f", avg_hv_m)
+        logger.info("    RMOEA/D  wins  %d / %d  instances",
+                    n_better, len(instances))
+        logger.info("-" * 78)
+
+        # ── 统计检验结果 ──
+        ft = stats_tests.get("friedman", {})
+        wh = stats_tests.get("wilcoxon_hv", {})
+        wm = stats_tests.get("wilcoxon_makespan", {})
+        ww = stats_tests.get("wilcoxon_workload", {})
+        es = stats_tests.get("effect_size_summary", {})
+
+        if ft:
+            logger.info("  Friedman Test (on HV means):")
+            logger.info("    chi^2 = %.4f, p = %.6f  %s",
+                        ft.get('statistic', 0), ft.get('p_value', 1),
+                        "<- SIGNIFICANT" if ft.get('significant') == 'yes' else "")
+
+        logger.info("-" * 78)
+        logger.info("  Wilcoxon Signed-Rank (Overall, paired by run)")
+        for label, wd in [("HV", wh), ("Makespan", wm), ("Workload", ww)]:
+            ov = wd.get("overall", {})
+            sig_mark = "* SIGNIFICANT" if ov.get("significant") == "yes" else "not significant"
+            logger.info("    %9s:  R+=%.1f  p=%.6f  d=%.3f  %s",
+                        label, ov.get('statistic', 0), ov.get('p_value', 1),
+                        ov.get('cohens_d', 0), sig_mark)
+
+        # ── Per-instance 快速一览表 ──
+        logger.info("-" * 78)
+        logger.info("  Per-Instance: HV [Delta%]  |  Makespan [Delta%]  |  Wilcoxon p")
+        for inst in instances:
+            a = agg_results[inst]
+            hv_r, hv_m = a["rmoea_d"]["hv_mean"], a["moea_d"]["hv_mean"]
+            mr, mm = a["rmoea_d"]["best_makespan_mean"], a["moea_d"]["best_makespan_mean"]
+            hv_delta = ((hv_r - hv_m) / hv_m * 100) if hv_m > 0 else 0
+            ms_delta = ((mm - mr) / mm * 100) if mm > 0 else 0
+            # 安全访问 per_instance，避免 KeyError
+            wp_hv = wh.get("per_instance", {}).get(inst, {})
+            wp_ms = wm.get("per_instance", {}).get(inst, {})
+            logger.info("  %-5s  HV:%+.1f%% %s | MS:%+.1f%% %s | HVp=%.4f  d_HV=%.2f",
+                        inst.upper(), hv_delta,
+                        "R+" if hv_r > hv_m else ("M+" if hv_m > hv_r else "="),
+                        ms_delta,
+                        "R+" if mr < mm else ("M+" if mm < mr else "="),
+                        wp_hv.get('p_value', 1), wp_hv.get('cohens_d', 0))
+
+        # ── 效应量汇总 ──
+        if es:
+            logger.info("-" * 78)
+            logger.info("  Cohen's d Effect Size Distribution (across instances)")
+            for label in ["HV", "Makespan", "Workload"]:
+                e = es[label]
+                logger.info("    %9s:  mean|d|=%.3f  median|d|=%.3f  [L:%d M:%d S:%d N:%d]",
+                            label, e["mean_d"], e["median_d"],
+                            e["n_large"], e["n_medium"], e["n_small"], e["n_negligible"])
+            logger.info("    (L=large>0.8  M=medium>0.5  S=small>0.2  N=negligible)")
+
+        logger.info("=" * 78)
+        logger.info("")
+    except UnicodeEncodeError as e:
+        # Windows 控制台编码问题处理
+        logger.error("Console encoding error (Windows PowerShell issue): %s", str(e))
+        logger.error("Report will be saved to log file instead")
+        # 尝试输出简化版本（仅 ASCII）
+        try:
+            logger.info("RMOEA/D vs MOEA/D - BENCHMARK SUMMARY")
+            logger.info("  Instances: %d, Runs: %d", len(instances), n_runs)
+            logger.info("  RMOEA/D avgHV: %.4f, MOEA/D avgHV: %.4f", avg_hv_r, avg_hv_m)
+        except:
+            pass  # 如果还是失败，就跳过控制台输出
+        # 确保详细报告写入日志文件
+        logger.debug("=" * 90)
+        logger.debug("RMOEA/D vs MOEA/D - FULL BENCHMARK REPORT")
+        logger.debug("=" * 90)
+        logger.debug("Config: Np=%d, Gen=%d, Runs=%d, Instances=%d",
+                    first['n_pop'], first['max_gen'], n_runs, len(instances))
+        logger.debug("RMOEA/D avgHV = %.4f, MOEA/D avgHV = %.4f, Wins = %d/%d",
+                    avg_hv_r, avg_hv_m, n_better, len(instances))
+
+    # ═══════════════════════════════════════════════════════
+    # 详细表格 → logger.debug (日志文件)
+    # ═══════════════════════════════════════════════════════
     logger.debug("=" * 90)
-    logger.debug("  RMOEA/D vs MOEA/D - EXPERIMENTAL RESULTS REPORT")
+    logger.debug("  RMOEA/D vs MOEA/D - DETAILED EXPERIMENTAL RESULTS")
     logger.debug("  (Paper: A reinforcement learning based RMOEA/D for bi-objective FFJSP)")
     logger.debug("=" * 90)
     logger.debug("  Configuration: Np=%d, Gen=%d, Runs=%d, Seed=%d",
                  first['n_pop'], first['max_gen'], first['n_runs'], first['base_seed'])
 
-    # 表1: HV对比
+    # 表1: HV对比 + Wilcoxon
     logger.debug("  %s", "─" * 85)
-    logger.debug("  TABLE 1: Hypervolume (HV) Comparison  [mean ± std, N=%d]", first['n_runs'])
-    logger.debug("  %s", "─" * 85)
-    logger.debug("  %-12s %-22s %-22s %-15s %s", "Instance", "RMOEA/D HV", "MOEA/D HV", "Improvement", "Winner")
+    logger.debug("  TABLE 1: Hypervolume (HV) + Wilcoxon  [mean ± std, N=%d]", n_runs)
+    logger.debug("  %-8s %-22s %-22s %-10s %-14s %s", "Inst", "RMOEA/D", "MOEA/D", "Δ%", "Wilcoxon p", "Cohen's d")
     for inst in instances:
         a = agg_results[inst]
         hv_r, hv_rs = a["rmoea_d"]["hv_mean"], a["rmoea_d"]["hv_std"]
         hv_m, hv_ms = a["moea_d"]["hv_mean"], a["moea_d"]["hv_std"]
         imp = ((hv_r - hv_m) / hv_m * 100) if hv_m > 0 else 0
-        winner = "RMOEA/D" if hv_r > hv_m else ("MOEA/D" if hv_m > hv_r else "Tie")
-        logger.debug("  %-12s %.4f ±%.4f       %.4f ±%.4f      %+.2f%%          %s",
-                     inst.upper(), hv_r, hv_rs, hv_m, hv_ms, imp, winner)
+        wp = wh.get("per_instance", {}).get(inst, {})
+        logger.debug("  %-8s %.4f ±%.4f     %.4f ±%.4f    %+6.1f%%  p=%.4f %s  d=%.3f",
+                     inst.upper(), hv_r, hv_rs, hv_m, hv_ms, imp,
+                     wp.get('p_value', 1), wp.get('sig', 'ns'), wp.get('cohens_d', 0))
 
-    # 表2: Makespan (Crisp)
+    # 表2: Makespan + Wilcoxon
     logger.debug("  %s", "─" * 85)
-    logger.debug("  TABLE 2: Best Makespan Comparison (Crisp)  [mean ± std]")
-    logger.debug("  %-12s %-22s %-22s %-15s", "Instance", "RMOEA/D", "MOEA/D", "Improvement")
+    logger.debug("  TABLE 2: Best Makespan  [mean ± std]")
+    logger.debug("  %-8s %-22s %-22s %-10s %-14s %s", "Inst", "RMOEA/D", "MOEA/D", "Δ%", "Wilcoxon p", "Cohen's d")
     for inst in instances:
         a = agg_results[inst]
         mr, mrs = a["rmoea_d"]["best_makespan_mean"], a["rmoea_d"]["best_makespan_std"]
         mm, mms = a["moea_d"]["best_makespan_mean"], a["moea_d"]["best_makespan_std"]
         imp = ((mm - mr) / mm * 100) if mm > 0 else 0
-        logger.debug("  %-12s %.2f ±%.2f           %.2f ±%.2f           %+.2f%%",
-                     inst.upper(), mr, mrs, mm, mms, imp)
+        wp = wm.get("per_instance", {}).get(inst, {})
+        logger.debug("  %-8s %.2f ±%.2f         %.2f ±%.2f        %+6.1f%%  p=%.4f %s  d=%.3f",
+                     inst.upper(), mr, mrs, mm, mms, imp,
+                     wp.get('p_value', 1), wp.get('sig', 'ns'), wp.get('cohens_d', 0))
 
-    # 表3: Fuzzy Makespan
+    # 表3: Fuzzy Makespan TFN
     logger.debug("  %s", "─" * 85)
-    logger.debug("  TABLE 3: Fuzzy Makespan - Triangular Fuzzy Number (t1, t2, t3)")
-    logger.debug("       Format: t1(earliest) / t2(most-likely) / t3(latest)")
-    logger.debug("  %-12s %-30s %-30s", "Instance", "RMOEA/D (t1/t2/t3)", "MOEA/D (t1/t2/t3)")
+    logger.debug("  TABLE 3: Fuzzy Makespan TFN (t1 / t2 / t3)")
+    logger.debug("  %-8s %-32s %-32s", "Inst", "RMOEA/D", "MOEA/D")
     for inst in instances:
         a = agg_results[inst]
         r = (f"{a['rmoea_d']['fuzzy_makespan_t1_mean']:.1f}/"
@@ -427,12 +621,12 @@ def print_report(agg_results, stats_tests):
         m = (f"{a['moea_d']['fuzzy_makespan_t1_mean']:.1f}/"
              f"{a['moea_d']['fuzzy_makespan_t2_mean']:.1f}/"
              f"{a['moea_d']['fuzzy_makespan_t3_mean']:.1f}")
-        logger.debug("  %-12s %-30s %-30s", inst.upper(), r, m)
+        logger.debug("  %-8s %-32s %-32s", inst.upper(), r, m)
 
-    # 表4: Fuzzy Workload
+    # 表4: Fuzzy Workload TFN
     logger.debug("  %s", "─" * 85)
-    logger.debug("  TABLE 4: Fuzzy Workload - Triangular Fuzzy Number (t1, t2, t3)")
-    logger.debug("  %-12s %-30s %-30s", "Instance", "RMOEA/D (t1/t2/t3)", "MOEA/D (t1/t2/t3)")
+    logger.debug("  TABLE 4: Fuzzy Workload TFN (t1 / t2 / t3)")
+    logger.debug("  %-8s %-32s %-32s", "Inst", "RMOEA/D", "MOEA/D")
     for inst in instances:
         a = agg_results[inst]
         r = (f"{a['rmoea_d']['fuzzy_workload_t1_mean']:.1f}/"
@@ -441,51 +635,20 @@ def print_report(agg_results, stats_tests):
         m = (f"{a['moea_d']['fuzzy_workload_t1_mean']:.1f}/"
              f"{a['moea_d']['fuzzy_workload_t2_mean']:.1f}/"
              f"{a['moea_d']['fuzzy_workload_t3_mean']:.1f}")
-        logger.debug("  %-12s %-30s %-30s", inst.upper(), r, m)
+        logger.debug("  %-8s %-32s %-32s", inst.upper(), r, m)
 
     # 表5: 运行时间
     logger.debug("  %s", "─" * 85)
-    logger.debug("  TABLE 5: Runtime Comparison (seconds)  [mean ± std]")
+    logger.debug("  TABLE 5: Runtime (seconds)  [mean ± std]")
     for inst in instances:
         a = agg_results[inst]
         tr, trs = a["rmoea_d"]["time_mean"], a["rmoea_d"]["time_std"]
         tm, tms = a["moea_d"]["time_mean"], a["moea_d"]["time_std"]
-        logger.debug("  %-12s RMOEA/D: %.2f ±%.2fs      MOEA/D: %.2f ±%.2fs",
+        logger.debug("  %-8s RMOEA/D: %.2f ±%.2f s      MOEA/D: %.2f ±%.2f s",
                      inst.upper(), tr, trs, tm, tms)
 
-    # 统计检验
-    ft = stats_tests.get("friedman", {})
-    wt = stats_tests.get("wilcoxon_overall", {})
-    wp = stats_tests.get("wilcoxon_per_instance", {})
-    
-    if ft:
-        logger.debug("  %s", "=" * 85)
-        logger.debug("  STATISTICAL TESTS (ref. Paper Table 8)")
-        logger.debug("  Friedman Test (on HV means across instances): chi2=%.4f, p=%.6f, sig=%s",
-                     ft.get('statistic', 0), ft.get('p_value', 1),
-                     str(ft.get('significant', False)).upper())
-    if wt:
-        logger.debug("  Wilcoxon Signed-Rank Test (HV paired): R+=%.2f, p=%.6f, sig=%s",
-                     wt.get('statistic', 0), wt.get('p_value', 1),
-                     str(wt.get('significant', False)).upper())
-    if wp:
-        logger.debug("  Per-instance Wilcoxon results:")
-        for inst in instances:
-            w = wp[inst]
-            sig_mark = "***" if w.get("sig") == "yes" else "   "
-            logger.debug("    %s: R+=%.2f, p=%.4f %s", inst.upper(),
-                        w.get('R+', 0), w.get('p_value', 1), sig_mark)
-
-    # ── 关键摘要 → logger.info（控制台+文件） ──
-    avg_hv_r = np.mean([agg_results[i]["rmoea_d"]["hv_mean"] for i in instances])
-    avg_hv_m = np.mean([agg_results[i]["moea_d"]["hv_mean"] for i in instances])
-    n_better = sum(1 for i in instances
-                   if agg_results[i]["rmoea_d"]["hv_mean"] > agg_results[i]["moea_d"]["hv_mean"])
-    logger.info("Report: RMOEA/D avgHV=%.4f | MOEA/D avgHV=%.4f | RMOEA/D wins %d/%d",
-                avg_hv_r, avg_hv_m, n_better, len(instances))
-    if ft and wt:
-        logger.info("Stats: Friedman p=%.4f | Wilcoxon p=%.4f",
-                    ft.get('p_value', 1), wt.get('p_value', 1))
+    logger.debug("  %s", "─" * 85)
+    logger.debug("  Full statistical results saved in aggregate JSON.")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -522,6 +685,8 @@ Examples:
                         help="Number of independent runs per instance (paper: 30)")
     parser.add_argument("--n_workers", type=int, default=None,
                         help="Parallel workers for n_runs (default: auto=min(cpu_count,n_runs))")
+    parser.add_argument("--timeout_per_task", type=float, default=None,
+                        help="Per-task timeout in seconds (None = no limit)")
     args = parser.parse_args()
 
     setup_logging(log_dir=args.log_dir)
@@ -539,16 +704,21 @@ Examples:
         n_runs=args.n_runs,
         output_dir=args.output_dir,
         n_workers=args.n_workers,
+        timeout_per_task=args.timeout_per_task,
     )
 
     # 统计检验
     if args.n_runs > 2:
         stats_tests = run_statistical_tests(agg_results)
     else:
-        stats_tests = {"friedman": {}, "wilcoxon_per_instance": {}, "wilcoxon_overall": {}}
+        stats_tests = {"friedman": {}, "wilcoxon_hv": {}, "wilcoxon_makespan": {}, "wilcoxon_workload": {}, "effect_size_summary": {}}
 
     # 打印报告
     print_report(agg_results, stats_tests)
+
+    # ── 目录结构: results/benchmark/{inst}/  +  results/schedules/{inst}/ ──
+    bench_dir = os.path.join(args.output_dir, "benchmark")
+    sched_dir = os.path.join(args.output_dir, "schedules")
 
     # 保存聚合结果（JSON）
     save_data = {
@@ -570,15 +740,18 @@ Examples:
                                if not k.startswith("_")}
         save_data["instances"][inst] = clean
 
-    output_path = os.path.join(args.output_dir,
-                                f"benchmark_aggregate_{timestamp}.json")
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(bench_dir, exist_ok=True)
+    # per-instance aggregate: 文件名含实例名防止子进程并发碰撞
+    output_path = os.path.join(bench_dir,
+                                f"benchmark_partial_{'_'.join(args.instances)}_{timestamp}.json")
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(save_data, f, indent=2, ensure_ascii=False)
     logger.debug("Aggregate results saved to: %s", output_path)
 
     # 保存每次运行详细结果（原有格式）
     for inst in args.instances:
+        inst_bench_dir = os.path.join(bench_dir, inst)
+        inst_sched_dir = os.path.join(sched_dir, inst)
         for run_idx in range(args.n_runs):
             ts_run = time.strftime("%Y%m%d_%H%M%S")
             # 从all_runs获取原始数据 - 我们需要保存原始results_r和results_m
@@ -592,7 +765,7 @@ Examples:
             }
             for algo_key, algo_dir in [("rmoea_d", "RMOEA_D"),
                                         ("moea_d", "MOEA_D")]:
-                r_dir = os.path.join(args.output_dir, inst, algo_dir)
+                r_dir = os.path.join(inst_bench_dir, algo_dir)
                 os.makedirs(r_dir, exist_ok=True)
                 r_path = os.path.join(r_dir,
                     f"{inst}_{algo_dir}_Np{args.n_pop}_G{args.max_gen}_run{run_idx}_{ts_run}.json")
@@ -600,8 +773,7 @@ Examples:
                     json.dump(run_summary[algo_key], f, indent=2, ensure_ascii=False)
 
             # 保存单实例单次summary
-            sum_dir = os.path.join(args.output_dir, inst)
-            sum_path = os.path.join(sum_dir,
+            sum_path = os.path.join(inst_bench_dir,
                 f"benchmark_summary_{inst}_run{run_idx}_{ts_run}.json")
             comp = {
                 "instance": inst, "run": run_idx,
@@ -615,16 +787,15 @@ Examples:
             # ── 保存完整 RMOEA/D 结果（含调度数据 schedules，用于甘特图生成）──
             full_r = all_runs[inst]["_full_results_r"][run_idx]
             if full_r and full_r.get("schedules"):
-                rmo_dir = os.path.join(args.output_dir, inst, "RMOEA_D")
-                os.makedirs(rmo_dir, exist_ok=True)
-                full_path = os.path.join(rmo_dir,
+                os.makedirs(inst_sched_dir, exist_ok=True)
+                full_path = os.path.join(inst_sched_dir,
                     f"{inst}_full_schedule_run{run_idx}_{ts_run}.json")
                 with open(full_path, "w", encoding="utf-8") as f:
                     json.dump(full_r, f, indent=2, ensure_ascii=False)
                 logger.debug("Full schedule saved: %s", full_path)
 
-    logger.info("Benchmark done: %d runs × %d instances saved to %s/", 
-                args.n_runs, len(args.instances), args.output_dir)
+    logger.info("Benchmark done: %d runs × %d instances saved to %s/ + %s/",
+                args.n_runs, len(args.instances), bench_dir, sched_dir)
 
 
 if __name__ == "__main__":

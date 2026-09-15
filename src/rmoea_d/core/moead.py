@@ -7,7 +7,7 @@ import numpy as np
 import time
 import logging
 
-from .encoding import decode
+from .encoding import decode_crisp
 from .operators import pox_crossover, ux_crossover, mutate_os, mutate_ma, repair_os, _repair_ma_for_os
 
 logger = logging.getLogger(__name__)
@@ -99,9 +99,8 @@ def moead_generation(population, objectives, weights, B, instance, z, crossover_
         child_ma = _repair_ma_for_os(child_os, child_ma, instance, rng)
         child_ma = mutate_ma(child_ma, child_os, instance, rng)
 
-        # Decode
-        # 解码计算模糊目标值，返回4个值，取清晰值用于进化
-        f_makespan, f_workload, mc, wc = decode(child_os, child_ma, instance)
+        # Decode (crisp-only, 零 FuzzyNumber 分配)
+        mc, wc = decode_crisp(child_os, child_ma, instance)
         f = [mc, wc]
 
         # Update reference point
