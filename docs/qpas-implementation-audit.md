@@ -10,7 +10,7 @@
 > 目标独占**——Mk10 上 `f2` 占 `CV²` 的 96.5%，makespan 对状态完全"隐形"。
 >
 > 复现命令：`python scripts/t_leverage_analysis.py --lab_json logs/_mk10_lab.json`
-> 审计脚本：`logs/_qpas_audit.py`（逐项输出见 `logs/_qpas_audit.txt`）
+> 审计脚本：`python scripts/qpas_audit.py [--instance Mk10] [--seed 42]`
 
 ---
 
@@ -207,18 +207,27 @@ S3    7.3106    6.4459    7.0194    5.8946    T=5
 
 ## 五、其余实现瑕疵
 
-不影响已有结论，但应记录（都不构成"算错"）：
+不影响已有结论，但应记录：
 
-1. **Q-PAS 与主搜索共享 RNG**：`algorithm.py` 传的是 `self.rng`，而它同时驱动
-   MIX3 初始化、交叉、变异、轮盘赌。Q-PAS 每代多消耗 1~2 次抽样，于是同 seed 下
-   "Q-PAS 组"与"固定 T 组"的轨迹从第 1 代起就分叉——分叉原因不只是 T 不同。
-   配对 Wilcoxon 仍然无偏，但方差被抬高：**被归因为"Q-PAS 噪声"的一部分，
-   其实是 RNG 流差异**。给 Q-PAS 一个独立的 `RandomState(seed)` 是廉价的
-   实验严谨性改进（不违反论文）。
-2. **死变量 `is_first`**：`step()` 返回、`algorithm.py` 接收，但从未被使用。
-3. **`q_init="optimistic"` 用固定种子** `RandomState(20240916)`：所有 run 共享
-   同一张初始 Q 表，引入跨 run 相关性。
-4. **`reward_mode="dv"` 硬编码 10.0**，未走 `w_dv` 参数（只有 `cv_dv` 模式用）。
+1. **Q-PAS 与主搜索共享 RNG**（未修，属实验设计问题而非代码缺陷）：`algorithm.py`
+   传的是 `self.rng`，而它同时驱动 MIX3 初始化、交叉、变异、轮盘赌。Q-PAS 每代多
+   消耗 1~2 次抽样，于是同 seed 下"Q-PAS 组"与"固定 T 组"的轨迹从第 1 代起就分叉
+   ——分叉原因不只是 T 不同。配对 Wilcoxon 仍然无偏，但方差被抬高：**被归因为
+   "Q-PAS 噪声"的一部分，其实是 RNG 流差异**。给 Q-PAS 一个独立的 `RandomState(seed)`
+   是廉价的实验严谨性改进（不违反论文），但会改变现有全部已成对样本，需整体重跑，
+   故留待下一轮统一处理。
+2. ~~**死变量 `is_first`**~~ —— **已修**：`is_first` 原先在 `algorithm.py` 中被赋值
+   但从未读取，现改为 `T, _ = self.ql.step(...)` 显式丢弃。
+3. ~~**`q_init="optimistic"` 用固定种子 `RandomState(20240916)`**~~ —— **已修**：
+   新增 `q_init_seed` 参数，`RMOEAD` 透传自身 `self.seed`，使每个 run 拿到不同的
+   初始 Q 表（缺省仍回落到原常量，保持向后兼容）。回归测试
+   `TestQlearningTieBreak::test_optimistic_init_seed_is_per_run` 锁定。
+4. **`reward_mode="dv"` 硬编码 10.0**（**非缺陷**）：论文式 (18) 给定的奖励就是
+   `R = 10`，因此论文模式硬编码 `10.0` 才是忠实实现；`w_dv` 仅用于论文之外的
+   `cv_dv` 组合模式。此处记录仅为说明「为什么有这个未使用的参数」。
+
+**本轮新增回归测试 3 条**（`test_refactor.py`，合计 47 passed）：覆盖乐观初始化
+的 per-run 种子与向后兼容，以及 `RMOEAD` 确实透传 `q_init_seed=self.seed`。
 
 ---
 
@@ -229,7 +238,8 @@ S3    7.3106    6.4459    7.0194    5.8946    T=5
 - 13 条核对项中 12 条与论文一致；唯一的主动偏离（Q 更新公式）是论文排版错误
   下的必要修正，且是可证明的：论文式字面在 `R>0` 时没有不动点。
 - 之前修掉的 3 个问题（HV 归一化口径、ε-greedy 极性、平局自锁）都是**真 bug**，
-  现在都有回归测试锁定（`tests/test_refactor.py`，44 passed）。
+  现在都有回归测试锁定（`tests/test_refactor.py`，47 passed）。本轮另清理了
+  两处实现瑕疵（死变量 `is_first`、乐观初始化的跨 run 固定种子）。
 
 **但"对"不等于"有效"。而且这次审计把无效的原因从"信息量不够"修正为更硬的
 事实：这个决策变量本身没有足够的杠杆。**

@@ -223,6 +223,7 @@ class RMOEAD:
                 tie_break=self.ql_tie_break,
                 q_init=self.ql_q_init,
                 q_init_scale=self.ql_q_init_scale,
+                q_init_seed=self.seed,
             )
         else:
             self.ql = None
@@ -263,10 +264,10 @@ class RMOEAD:
             # Step 2: Q-learning selects T or use fixed T
             if self.fixed_T is not None:
                 T = self.fixed_T
-                is_first = False
                 logger.debug("Generation %d/%d: Using fixed T=%d", gen, self.max_gen, T)
             else:
-                T, is_first = self.ql.step(pf, self.rng)
+                # 第二个返回值（是否是首次调用）对主循环无用，此处忽略即可
+                T, _ = self.ql.step(pf, self.rng)
                 logger.debug("Generation %d/%d: Q-learning selected T=%d", gen, self.max_gen, T)
 
             # Step 3: Recompute neighbors with new T

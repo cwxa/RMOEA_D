@@ -6,10 +6,14 @@
   2. RMOEAD 在 fixed_T 模式下正确跳过 Q-learning 初始化
   3. ablation_visualization.py 导入与数据加载
   4. experiment._extract_run 字段提取完整性
+  5. 消融诊断中修复的 4 个缺陷回归锁：
+     HV 参考集归一化、RVNS Tchebycheff 接受准则、Q-PAS ε 极性、Q 表平局自锁
+  6. Q-PAS 论文口径守卫：CV 默认不归一化、奖励默认按式(18)
 """
 
 import sys
 import os
+import inspect
 import unittest
 import numpy as np
 
@@ -268,6 +272,35 @@ class TestQlearningTieBreak(unittest.TestCase):
 
     def test_default_tie_break_is_random(self):
         self.assertEqual(QLearningPAS().tie_break, "random")
+
+    def test_optimistic_init_seed_is_per_run(self):
+        """乐观初始化必须随 run 的 seed 变化。
+
+        若所有 run 共享同一张初始 Q 表，各 run 之间会引入人为相关性，
+        压低方差并污染配对检验。algorithm.py 现在透传 self.seed。
+        """
+        a = QLearningPAS(actions=[5, 10, 15, 20], q_init="optimistic",
+                         q_init_seed=42).q_table
+        b = QLearningPAS(actions=[5, 10, 15, 20], q_init="optimistic",
+                         q_init_seed=43).q_table
+        c = QLearningPAS(actions=[5, 10, 15, 20], q_init="optimistic",
+                         q_init_seed=42).q_table
+        self.assertFalse(np.allclose(a, b), "不同 seed 应得到不同初始 Q 表")
+        np.testing.assert_allclose(a, c, err_msg="同 seed 必须可复现")
+
+    def test_optimistic_init_falls_back_to_constant_seed(self):
+        """不传 q_init_seed 时行为不变（向后兼容）。"""
+        a = QLearningPAS(actions=[5, 10, 15, 20], q_init="optimistic").q_table
+        b = QLearningPAS(actions=[5, 10, 15, 20], q_init="optimistic",
+                         q_init_seed=None).q_table
+        np.testing.assert_allclose(a, b)
+
+    def test_rmoead_passes_seed_to_optimistic_init(self):
+        """RMOEAD 必须把自己的 seed 传给乐观初始化。"""
+        sig = inspect.signature(QLearningPAS.__init__)
+        self.assertIn("q_init_seed", sig.parameters)
+        src = inspect.getsource(RMOEAD.solve)
+        self.assertIn("q_init_seed=self.seed", src)
 
 
 class TestHypervolumeNormalization(unittest.TestCase):

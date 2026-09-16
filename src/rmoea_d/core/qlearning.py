@@ -47,7 +47,8 @@ class QLearningPAS:
                  reward_mode="dv", hv_bounds=None, cv_normalize=False,
                  w_cv=5.0, w_dv=5.0, w_hv=10.0,
                  w_hv_cont=100.0, w_hv_clip=10.0,
-                 tie_break="random", q_init="zero", q_init_scale=0.1):
+                 tie_break="random", q_init="zero", q_init_scale=0.1,
+                 q_init_seed=None):
         self.alpha = alpha
         self.gamma = gamma
         self.epsilon = epsilon
@@ -59,8 +60,10 @@ class QLearningPAS:
         self.q_init = q_init
         if q_init == "optimistic":
             # 乐观初始化：同样用于打破「全零 → 恒取索引 0」的对称性。
-            # 用固定种子保证可复现（后续 update 会按奖励把各动作分化开）。
-            _r = np.random.RandomState(20240916)
+            # 种子取 run 自身的 seed（缺省回落到常量），否则所有 run 共享同一张
+            # 初始 Q 表会引入跨 run 相关性，人为压低方差、污染配对检验。
+            _r = np.random.RandomState(
+                int(q_init_seed) if q_init_seed is not None else 20240916)
             self.q_table = _r.uniform(0.0, q_init_scale,
                                       size=(self.n_states, self.n_actions))
         else:

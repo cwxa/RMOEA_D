@@ -70,10 +70,11 @@ RMOEA_D/
 │   ├── ablation_analysis.py             # ★ 消融分析 (参考集归一化 HV + 配对检验 + 2×2 因子分解)
 │   ├── paper_table5_audit.py            # ★ 论文 Table 5 阶梯逐步骤审计 (符号检验 + 排名/效应量对照)
 │   ├── t_leverage_sweep.py              # ★ T 杠杆 / Q-PAS / 局部搜索实验台 (分批·增量·可续跑)
-│   └── t_leverage_analysis.py           # ★ 上述实验台的分析 (参考集归一化 + 组件分解)
+│   ├── t_leverage_analysis.py           # ★ 上述实验台的分析 (参考集归一化 + 组件分解)
+│   └── qpas_audit.py                    # ★ Q-PAS 逐条审计 (式(13)不动点 / CV 尺度 / Q 表语义 / RNG)
 │
 ├── tests/                               # 单元测试
-│   └── test_refactor.py                 # 重构验证 (MOEA/D 继承关系、Q-learning 策略、结果字段)
+│   └── test_refactor.py                 # 重构验证 + 消融诊断修复的回归锁 (47 cases)
 │
 ├── data/                                # Brandimarte 原始实例 (Mk01~Mk10.fjs)
 ├── test_cases/                          # 固定测试用例 (seed=42)
@@ -226,6 +227,10 @@ python scripts\paper_table5_audit.py
 # T 杠杆 / Q-PAS / 局部搜索对照实验台 (分批·增量落盘·可断点续跑)
 python scripts\t_leverage_sweep.py --instance Mk10 --arms RandVNS,RVNSonly,RVNSonly_t3
 python scripts\t_leverage_analysis.py --lab_json logs\_mk10_lab.json
+
+# Q-PAS 实现审计：逐条核对论文 Algorithm 3 + 5 项数值验证
+# (式(13) 不动点 / CV 尺度支配 / 状态翻转率 / Q 表语义 / RNG 共享)
+python scripts\qpas_audit.py --instance Mk10 --seed 42
 ```
 
 ---
