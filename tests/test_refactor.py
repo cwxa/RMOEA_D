@@ -381,5 +381,59 @@ class TestRVNSRandomMode(unittest.TestCase):
         self.assertEqual(seen, {0, 1, 2, 3, 4})
 
 
+class TestQpasCVNormalization(unittest.TestCase):
+    """Q-PAS 的 CV 归一化开关。
+
+    论文式(14) 的 CV 用原始目标值，未规定归一化。当两个目标量纲悬殊时，
+    CV 会被大量纲目标独占（实测 Mk10 上 f2 占 CV² 的 96.5%），ΔCV 的符号
+    几乎只反映该目标的方向——状态对另一目标「隐形」。
+
+    ``cv_normalize`` 是论文之外的可选项，默认必须为 False（复现优先）。
+    这组测试同时锁住「默认不偏离论文」与「打开后确实抹平尺度」两件事。
+    """
+
+    PF = [(10.0, 100.0), (14.0, 160.0), (18.0, 240.0)]
+
+    def test_default_keeps_paper_scale(self):
+        self.assertFalse(QLearningPAS().cv_normalize)
+
+    def test_rmoead_signature_defaults_to_paper_behavior(self):
+        import inspect
+        sig = inspect.signature(RMOEAD.__init__)
+        self.assertIn("ql_cv_normalize", sig.parameters)
+        self.assertIs(sig.parameters["ql_cv_normalize"].default, False)
+
+    def test_unnormalized_cv_scales_linearly(self):
+        # CV 是齐次一次的：目标整体放大 100 倍 -> CV 也放大 100 倍
+        ql = QLearningPAS()
+        cv_a, _ = ql.compute_cv_dv(self.PF)
+        cv_b, _ = ql.compute_cv_dv([(a * 100.0, b * 100.0) for a, b in self.PF])
+        self.assertAlmostEqual(cv_b / cv_a, 100.0, places=6)
+
+    def test_unnormalized_cv_is_dominated_by_the_large_dimension(self):
+        # 只放大第二个目标 -> CV 几乎完全跟着它走
+        ql = QLearningPAS()
+        cv_a, _ = ql.compute_cv_dv(self.PF)
+        cv_b, _ = ql.compute_cv_dv([(a, b * 100.0) for a, b in self.PF])
+        self.assertGreater(cv_b / cv_a, 50.0)
+
+    def test_normalized_cv_is_scale_invariant(self):
+        # 两个目标同比放大、归一化盒也同比放大 -> 点在盒中的相对位置不变
+        # -> 归一化后的 CV 必须逐位相同
+        cv_a, _ = QLearningPAS(
+            cv_normalize=True, hv_bounds=([0.0, 0.0], [20.0, 300.0])
+        ).compute_cv_dv(self.PF)
+        cv_b, _ = QLearningPAS(
+            cv_normalize=True, hv_bounds=([0.0, 0.0], [2000.0, 30000.0])
+        ).compute_cv_dv([(a * 100.0, b * 100.0) for a, b in self.PF])
+        self.assertAlmostEqual(cv_a, cv_b, places=12)
+
+    def test_normalize_argument_overrides_the_instance_setting(self):
+        ql = QLearningPAS(cv_normalize=False)
+        cv_norm, _ = ql.compute_cv_dv(self.PF, normalize=True)
+        cv_raw, _ = ql.compute_cv_dv(self.PF, normalize=False)
+        self.assertNotAlmostEqual(cv_norm, cv_raw, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

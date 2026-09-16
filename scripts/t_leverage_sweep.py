@@ -102,6 +102,14 @@ ARM_DEF = {
     # Q-PAS 在强局部搜索下的干净隔离：只有 ls_trials 与 Full 不同，
     # 否则「Full vs RVNSonly_t3」会把 Q-PAS 与邻域尝试次数的差异混在一起。
     "Full_t3":      ("full", dict(ql_reward_mode="dv", rvns_ls_trials=3)),
+    # ── CV 归一化：论文式(14) 未规定归一化，量纲悬殊时状态会被大量纲目标独占 ──
+    # 实测 Mk10 上 f2 占 CV^2 的 96.5%，归一化后 44.7% 的历史状态会翻转。
+    # 这两臂用来回答「状态空间的信息量是否是 Q-PAS 失效的瓶颈」。
+    "QPAS2_dv_cvnorm":      ("qpas", dict(ql_reward_mode="dv", ql_tie_break="random",
+                                         ql_cv_normalize=True)),
+    "QPAS2_hv_wide_cvnorm": ("qpas", dict(ql_reward_mode="hv", ql_tie_break="random",
+                                         ql_actions=[5, 10, 20, 50],
+                                         ql_cv_normalize=True)),
 }
 
 

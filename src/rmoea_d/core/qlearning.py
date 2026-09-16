@@ -44,7 +44,7 @@ class QLearningPAS:
     """
 
     def __init__(self, alpha=0.4, gamma=0.6, epsilon=0.8, actions=None,
-                 reward_mode="dv", hv_bounds=None,
+                 reward_mode="dv", hv_bounds=None, cv_normalize=False,
                  w_cv=5.0, w_dv=5.0, w_hv=10.0,
                  w_hv_cont=100.0, w_hv_clip=10.0,
                  tie_break="random", q_init="zero", q_init_scale=0.1):
@@ -54,6 +54,7 @@ class QLearningPAS:
         self.actions = actions if actions is not None else [5, 10, 15, 20]
         self.n_actions = len(self.actions)
         self.n_states = 4
+        self.cv_normalize = cv_normalize
         self.tie_break = tie_break
         self.q_init = q_init
         if q_init == "optimistic":
@@ -79,15 +80,43 @@ class QLearningPAS:
         self.prev_state = None
         self.prev_action_idx = None
 
-    def compute_cv_dv(self, pf):
+    def compute_cv_dv(self, pf, normalize=None):
         """
         Compute convergence (CV) and diversity (DV) from Pareto front.
         计算Pareto前沿的收敛性(CV)和多样性(DV)。
-        pf: list of (f1, f2) crisp objective vectors.
+
+        论文式 (14) 的 CV 是「到参考点 P* 的均方距离」，未规定归一化。
+        当两个目标量纲悬殊时，CV 会被大量纲目标独占——实测 Mk10 上
+        f2（总负载）占 CV² 的 96.5%，makespan 仅 3.5%，于是 ΔCV 的符号
+        几乎只反映 f2 的方向；把目标拉回同一尺度后约 45% 的历史状态
+        会翻转。因此提供 ``cv_normalize`` 开关：
+
+        - ``False``（默认）：严格照论文，用原始目标值计算（复现性优先）
+        - ``True``：先用 ``hv_bounds``（缺省则用本代前沿范围）归一到同一
+          尺度，使 CV 同时反映两个目标
+
+        Parameters
+        ----------
+        pf : list of (f1, f2) crisp objective vectors
+        normalize : bool or None
+            None 时沿用 ``self.cv_normalize``。
         """
-        if len(pf) == 0:
+        if normalize is None:
+            normalize = self.cv_normalize
+        if pf is None or len(pf) == 0:
             return 0.0, 0.0
-        pf = np.array(pf)
+        pf = np.asarray(pf, dtype=float)
+        if pf.ndim != 2:
+            return 0.0, 0.0
+
+        if normalize:
+            if self.hv_bounds is not None:
+                lo = np.asarray(self.hv_bounds[0], dtype=float)
+                hi = np.asarray(self.hv_bounds[1], dtype=float)
+            else:
+                lo, hi = pf.min(axis=0), pf.max(axis=0)
+            span = np.where((hi - lo) > 1e-12, hi - lo, 1.0)
+            pf = (pf - lo) / span
 
         # CV: sqrt of mean squared distance to ideal point (0,0)
         # CV: 到理想点(0,0)的均方距离平方根

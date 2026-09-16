@@ -114,7 +114,8 @@ RMOEA_D/
 │
 └── docs/                                # 论文与设计文档
     ├── ablation-qpas-rvns-diagnosis.md  # 消融诊断：4 个 bug + T 杠杆 + 组件分解
-    └── paper-vs-reproduction.md         # ★ 与论文 (Li et al. 2022) 的逐条对照
+    ├── paper-vs-reproduction.md         # ★ 与论文 (Li et al. 2022) 的逐条对照
+    └── qpas-implementation-audit.md     # ★ Q-PAS 实现审计 (逐条核对 + 6 处论文笔误)
 ```
 
 ---
@@ -257,6 +258,27 @@ python scripts\t_leverage_analysis.py --lab_json logs\_mk10_lab.json
 （固定 T 扫参 Friedman p=4.7e-05\*\*\*，最优 T=50 落在论文候选集 {5,10,15,20} 之外），
 但在四种语境下 Q-PAS 相对配对对照均未达显著（+1.56% / +0.56% / −1.49%，p≥0.13）。
 详见 `docs/ablation-qpas-rvns-diagnosis.md` 与 `docs/paper-vs-reproduction.md`。
+
+## Q-PAS 的 CV 归一化（`ql_cv_normalize`）
+
+论文式 (14) 用**原始目标值**算 CV，且未规定归一化。当两个目标量纲悬殊时，
+CV 被大量纲目标独占——实测 Mk10 上一次 200 代运行里
+`f2` 占 `CV²` 的 **96.5%**、`f1` 仅 **3.5%**，而状态只由 `ΔCV` 的**符号**决定，
+于是 makespan 对 Q-PAS 的状态完全隐形。把同一批前沿的两目标拉回同一尺度重算，
+**44.7% 的历史状态会翻转**——状态划分不是尺度不变的。
+
+| 值 | 行为 |
+|----|------|
+| `False`（**默认**） | 严格照论文，用原始目标值计算（复现优先） |
+| `True` | 先用 `hv_bounds`（缺省用本代前沿范围）归一到同一尺度 |
+
+**实测结论：打开它没有救回 Q-PAS**。Mk10 × 30 seeds 对照：
+`0.82740 → 0.82458`（dv）、`0.83590 → 0.83091`（hv+wide），HV 略降且仍 n.s.
+它是定义层面的瑕疵（值得写进复现说明），但不是 Q-PAS 失效的原因。
+
+**真正的原因**：排除 `T=5` 后，T 的收益曲线几乎是平的（T10/15/20/50/100
+极差仅 0.0168，而 run 间 σ 为 0.034~0.055）。T 的杠杆几乎全部来自
+"别用 T=5"，而非"选到最优 T"。完整审计见 `docs/qpas-implementation-audit.md`。
 
 ## RVNS 算子选择模式（`rvns_mode`）
 

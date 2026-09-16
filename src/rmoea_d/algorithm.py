@@ -53,6 +53,7 @@ class RMOEAD:
         ql_epsilon=0.8,
         ql_actions=None,
         ql_reward_mode="dv",
+        ql_cv_normalize=False,
         ql_tie_break="random",
         ql_q_init="zero",
         ql_q_init_scale=0.1,
@@ -80,6 +81,8 @@ class RMOEAD:
             ql_gamma: Q-learning discount factor
             ql_epsilon: Q-learning epsilon for exploration
             ql_actions: List of candidate T values
+            ql_cv_normalize: 是否把 CV 的两个目标归一化到同一尺度
+                             （默认 False，即严格照论文式(14) 用原始值）
             enable_rvns: Whether to enable RVNS local search
             rvns_lp: RVNS 成功/失败记忆窗口长度 LP
             rvns_ls_trials: RVNS 每个解每代最多尝试的邻域次数 (论文为 1)
@@ -108,6 +111,9 @@ class RMOEAD:
         self.ql_epsilon = ql_epsilon
         self.ql_actions = ql_actions if ql_actions is not None else [5, 10, 15, 20]
         self.ql_reward_mode = ql_reward_mode
+        # CV 归一化：论文式(14) 用原始目标值，量纲悬殊时会让大量纲目标独占
+        # CV、使状态「看不见」另一目标。默认 False = 严格照论文。
+        self.ql_cv_normalize = ql_cv_normalize
         # 平局处理：Q 表初值并列时若固定取索引 0，会把策略锁死在 actions[0]
         self.ql_tie_break = ql_tie_break
         self.ql_q_init = ql_q_init
@@ -213,6 +219,7 @@ class RMOEAD:
                 actions=self.ql_actions,
                 reward_mode=self.ql_reward_mode,
                 hv_bounds=self.hv_bounds,
+                cv_normalize=self.ql_cv_normalize,
                 tie_break=self.ql_tie_break,
                 q_init=self.ql_q_init,
                 q_init_scale=self.ql_q_init_scale,
@@ -393,6 +400,7 @@ class RMOEAD:
             "history": self.history,
             "q_table": self.ql.q_table.tolist() if self.ql else None,
             "ql_reward_mode": self.ql_reward_mode if self.ql else None,
+            "ql_cv_normalize": self.ql_cv_normalize if self.ql else None,
             "rvns_final_probs": self.rvns.get_probabilities() if self.rvns else None,
             # ── 调度过程数据 (用于甘特图和结果分析) ──
             "schedules": best_schedules,
