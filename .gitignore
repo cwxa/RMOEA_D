@@ -2,7 +2,6 @@
 *.log
 /results
 /charts
-docs/EXPERIMENT_SUMMARY.md
 /src/rmoea_d.egg-info
 /.workbuddy/
 /.pytest_cache/

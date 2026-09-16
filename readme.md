@@ -19,7 +19,10 @@
 ### 代码架构特点
 
 - **继承复用**: `MOEADBaseline` 继承自 `RMOEAD`，通过构造函数参数特化（`fixed_T=10`, `enable_rvns=False`）消除重复代码
-- **图表复用**: `ablation_visualization.py` 复用 `analysis_report.py` 标准图表生成函数，避免重复造轮子
+- **绘图复用**: `plot_helpers.py` 统一提供学术配色 / rcParams / 轴样式 / 数据来源脚注，
+  被 `visualization.py`、`comparison_charts.py`、`analysis_report.py` 共用，消除重复代码
+- **图表分工**: `visualization.py` 出 TFN 三线表 + PF/HV 对比；`analysis_report.py` 出带统计检验的
+  对比 / 消融分析图；`ablation_visualization.py` 为独立运行的消融补充图（未被流水线调用）
 - **统一日志**: 双路日志系统（控制台 INFO + 文件 DEBUG），关键变量与执行计时全面记录
 - **单元测试**: `tests/test_refactor.py` 覆盖重构后核心功能的正确性验证
 
@@ -29,7 +32,7 @@
 
 ```
 RMOEA_D/
-├── main.py                              # 唯一入口 (optimize / benchmark / ablation / run_all)
+├── main.py                              # 唯一入口 (optimize / analyze / visualize / benchmark / ablation / run_all)
 ├── readme.md
 │
 ├── src/rmoea_d/
@@ -46,16 +49,16 @@ RMOEA_D/
 │   │   └── rvns.py                      # RVNS (5 LS 算子 + 记忆机制)
 │   │
 │   └── utils/                           # 工具 & 实验流水线
-│       ├── run_all.py                   # ★ 一键并行全流程 (统一实验 + viz + 甘特图)
+│       ├── run_all.py                   # ★ 一键并行全流程 (统一实验 + 可视化 + 统计分析 + 甘特图)
 │       ├── experiment.py                # 统一实验脚本 (每次 seed 同时产出 4 种算法变体)
 │       ├── benchmark.py                 # 对比实验 (RMOEA/D vs MOEA/D + 统计检验)
 │       ├── ablation.py                  # 消融实验 (结构解耦验证)
-│       ├── visualization.py             # 图表入口 (TFN 三线表 + PF/HV 对比 + 甘特图)
+│       ├── visualization.py             # 出图入口 (TFN 三线表 + PF/HV 对比；甘特图函数供 run_all 调用)
 │       ├── tfn_table_charts.py          # ★ TFN 对比三线表 (SCI/booktabs 风格)
 │       ├── comparison_charts.py         # PF 与 HV 对比图
 │       ├── plot_helpers.py              # 共享绘图工具 (学术配色 / rcParams / 轴样式)
-│       ├── ablation_visualization.py    # 消融图表辅助 (结果加载 / 多轮聚合)
-│       ├── analysis_report.py           # 综合分析报告与统计检验图表
+│       ├── ablation_visualization.py    # 消融补充图表 (独立运行, 流水线未调用)
+│       ├── analysis_report.py           # 综合分析报告与统计检验图表 (run_all Phase 2b)
 │       ├── metrics.py                   # HV / 非支配排序
 │       ├── logger_setup.py              # 日志配置
 │       ├── generate_test_cases.py       # 固定测试用例生成
@@ -87,15 +90,21 @@ RMOEA_D/
 │   └── schedules/                       # 调度数据 (甘特图源)
 │       └── mk01/mk01_full_schedule_run{idx}_{exp_id}.json
 │
-├── charts/                              # 可视化图表
+├── charts/                              # 可视化图表 (由 run_all 的 Viz 阶段产出)
 │   ├── benchmark/
-│   │   ├── benchmark_tfn_comparison_table.png   # ★ TFN 三线表
-│   │   ├── hv_comparison.png
-│   │   └── mk01/pareto_front_comparison.png     # per-instance, Mk01~Mk10
+│   │   ├── benchmark_tfn_comparison_table.png   # ★ TFN 三线表      (visualization.py)
+│   │   ├── hv_comparison.png                    # PF / HV 对比      (comparison_charts.py)
+│   │   ├── mk01/pareto_front_comparison.png     # per-instance, Mk01~Mk10
+│   │   └── benchmark_{hv,makespan,workload}_comparison_{exp_id}.png
+│   │       benchmark_{cohens_d,pvalue_heatmap,effect_summary,stats_card}_{exp_id}.png
+│   │                                            # 统计分析图表       (analysis_report.py)
 │   ├── ablation/
-│   │   ├── ablation_tfn_comparison_table.png    # ★ TFN 三线表
+│   │   ├── ablation_tfn_comparison_table.png    # ★ TFN 三线表      (visualization.py)
 │   │   ├── hv_comparison.png
-│   │   └── mk01/pareto_front_comparison.png     # per-instance, Mk01~Mk10
+│   │   ├── mk01/pareto_front_comparison.png     # per-instance, Mk01~Mk10
+│   │   └── ablation_{hv,makespan,runtime}_comparison.png
+│   │       ablation_{cohens_d_matrix,cohens_d_per_instance,pvalue_heatmap,stats_card}.png
+│   │                                            # 统计分析图表       (analysis_report.py)
 │   └── schedules/                       # 甘特图 (--skip_gantt 时不生成)
 │       └── mk01/...
 │
@@ -126,6 +135,15 @@ pip install -e .
 ```powershell
 python main.py run_all
 ```
+
+流水线阶段（实例级并行，`--max_workers` 控制外层进程数）：
+
+| 阶段 | 内容 | 产出 | 跳过开关 |
+|------|------|------|----------|
+| Phase 1 | 统一实验：10 实例 × n_runs × 4 变体 | `results/experiment/` + `results/benchmark/`(聚合) | — |
+| Phase 2 | 可视化 `visualization.py` | TFN 三线表 + PF/HV 对比 | `--skip_viz` |
+| Phase 2b | 统计分析 `analysis_report.py` | 带检验的对比 / 消融分析图 | `--skip_viz` |
+| Phase 3 | 甘特图并行渲染 | `charts/schedules/` | `--skip_gantt` |
 
 核心参数：
 
