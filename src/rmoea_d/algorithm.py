@@ -59,6 +59,7 @@ class RMOEAD:
         enable_rvns=True,
         rvns_lp=40,
         rvns_ls_trials=1,
+        rvns_mode="rl",
         fixed_T=None,
         timeout=None,
         algorithm_name="RMOEA/D",
@@ -82,6 +83,8 @@ class RMOEAD:
             enable_rvns: Whether to enable RVNS local search
             rvns_lp: RVNS 成功/失败记忆窗口长度 LP
             rvns_ls_trials: RVNS 每个解每代最多尝试的邻域次数 (论文为 1)
+            rvns_mode: "rl" 按 SM/FM 轮盘赌选算子；"random" 五算子等概率随机选
+                       （论文 Section 4.6 用法 (1)，即 RMOEA/D3 的随机 VNS）
             fixed_T: Fixed neighborhood size (if None, use Q-learning)
             timeout: Maximum wall-clock time in seconds (None = no limit)
             algorithm_name: Algorithm name for result metadata
@@ -113,7 +116,9 @@ class RMOEAD:
         # RVNS parameters
         self.rvns_lp = rvns_lp
         self.rvns_ls_trials = rvns_ls_trials
-        self.rvns = (RVNS(n_operators=5, lp=rvns_lp, ls_trials=rvns_ls_trials)
+        self.rvns_mode = rvns_mode
+        self.rvns = (RVNS(n_operators=5, lp=rvns_lp, ls_trials=rvns_ls_trials,
+                          mode=rvns_mode)
                      if enable_rvns else None)
 
         # Internal state

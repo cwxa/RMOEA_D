@@ -67,7 +67,10 @@ RMOEA_D/
 │
 ├── scripts/                             # 脚本工具
 │   ├── build_ppt.py                     # 自动生成 4 阶段学术汇报 PPT
-│   └── ablation_analysis.py             # ★ 消融分析 (参考集归一化 HV + 配对检验 + 2×2 因子分解)
+│   ├── ablation_analysis.py             # ★ 消融分析 (参考集归一化 HV + 配对检验 + 2×2 因子分解)
+│   ├── paper_table5_audit.py            # ★ 论文 Table 5 阶梯逐步骤审计 (符号检验 + 排名/效应量对照)
+│   ├── t_leverage_sweep.py              # ★ T 杠杆 / Q-PAS / 局部搜索实验台 (分批·增量·可续跑)
+│   └── t_leverage_analysis.py           # ★ 上述实验台的分析 (参考集归一化 + 组件分解)
 │
 ├── tests/                               # 单元测试
 │   └── test_refactor.py                 # 重构验证 (MOEA/D 继承关系、Q-learning 策略、结果字段)
@@ -110,6 +113,8 @@ RMOEA_D/
 │       └── mk01/...
 │
 └── docs/                                # 论文与设计文档
+    ├── ablation-qpas-rvns-diagnosis.md  # 消融诊断：4 个 bug + T 杠杆 + 组件分解
+    └── paper-vs-reproduction.md         # ★ 与论文 (Li et al. 2022) 的逐条对照
 ```
 
 ---
@@ -213,6 +218,13 @@ python scripts\build_ppt.py --phase 4   # 结果分析
 
 # 消融结果分析 (参考集归一化 HV + 配对检验 + 2×2 因子分解)
 python scripts\ablation_analysis.py --results_dir results\experiment --instance mk01
+
+# 论文 (Li et al. 2022) 消融阶梯审计：逐步骤效应量 + 精确符号检验
+python scripts\paper_table5_audit.py
+
+# T 杠杆 / Q-PAS / 局部搜索对照实验台 (分批·增量落盘·可断点续跑)
+python scripts\t_leverage_sweep.py --instance Mk10 --arms RandVNS,RVNSonly,RVNSonly_t3
+python scripts\t_leverage_analysis.py --lab_json logs\_mk10_lab.json
 ```
 
 ---
@@ -238,9 +250,31 @@ python scripts\ablation_analysis.py --results_dir results\experiment --instance 
 | `"dv"` | ΔDV > 0 → 10，否则 0 | **默认**，严格照论文式 (20) |
 | `"cv_dv"` | ΔCV>0 与 ΔDV>0 各计 5 分 | 把收敛性纳入奖励 |
 | `"hv"` | ΔHV > 0 → 10，否则 0 | 奖励直接对齐最终评价指标 |
+| `"hv_cont"` | 连续 HV 增量 | 二值奖励的连续化版本 |
 
-三种模式在 Mk01 上的 A/B 对比均无显著差异（Friedman p=0.86）——
-根因是「邻域大小 T」在该实例上是弱杠杆（T 扫参 p=0.15），而非奖励设计问题。
+四种模式两两差异均不显著（Mk01 上 Friedman p=0.86；Mk10 上亦然）。
+**根因不是奖励设计，而是 Q-PAS 本身的收益上限**：Mk10 上 T 确实是强杠杆
+（固定 T 扫参 Friedman p=4.7e-05\*\*\*，最优 T=50 落在论文候选集 {5,10,15,20} 之外），
+但在四种语境下 Q-PAS 相对配对对照均未达显著（+1.56% / +0.56% / −1.49%，p≥0.13）。
+详见 `docs/ablation-qpas-rvns-diagnosis.md` 与 `docs/paper-vs-reproduction.md`。
+
+## RVNS 算子选择模式（`rvns_mode`）
+
+| 值 | 行为 | 说明 |
+|----|------|------|
+| `"rl"` | 按 SM/FM 轮盘赌选算子 | **默认**，论文 RVNS |
+| `"random"` | 五算子等概率随机选 | 论文 §4.6 用法 (1)，即变体 RMOEA/D3 |
+
+`rvns_mode` 的存在是为了把「加上局部搜索本身」与「RL 引导选算子」在消融里**分开**——
+论文阶梯里随机 VNS 早在 D3 就位，所以它测的 RVNS 增益只是后者。
+`ls_trials`（每代邻域尝试次数）是比算子选择更强的杠杆：
+
+| 对照（Mk10, n=30） | ΔHV 相对 | p |
+|---|---|---|
+| 加上局部搜索本身（论文 `ls_trials=1`） | +5.68% | 1.8e-05 \*\*\* |
+| RL 引导选算子 vs 随机选算子（`ls_trials=1`） | −0.25% | 0.53 n.s. |
+| RL 引导选算子 vs 随机选算子（`ls_trials=3`） | **+1.86%** | **0.045 \*** |
+| 邻域尝试 1 → 3 次 | **+4.68%** | 3.5e-05 \*\*\* |
 详见 `docs/ablation-qpas-rvns-diagnosis.md`。
 
 ---

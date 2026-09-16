@@ -341,5 +341,45 @@ class TestRVNSTchebycheffAcceptance(unittest.TestCase):
         self.assertIn("z", params)
 
 
+class TestRVNSRandomMode(unittest.TestCase):
+    """回归测试：rvns_mode="random" 必须等价于论文 RMOEA/D3 的随机选择 VNS。
+
+    论文 Section 4.6 的用法 (1) 是「从五个算子里等概率随机选一个」。
+    若 mode 失效（比如记忆仍然改变概率），这一臂就不再是论文的随机 VNS，
+    我们与论文阶梯的对照随之失效——所以这个行为必须锁住。
+    """
+
+    def _fake_population(self, n=3):
+        pop = [([0, 1, 0, 1], [0, 1, 0, 1]) for _ in range(n)]
+        return pop
+
+    def test_mode_stored(self):
+        self.assertEqual(RVNS(mode="random").mode, "random")
+        self.assertEqual(RVNS().mode, "rl")
+
+    def test_random_mode_keeps_probabilities_uniform(self):
+        rvns = RVNS(n_operators=5, mode="random")
+        for op_idx, success in [(0, True), (0, True), (2, False), (3, True)]:
+            rvns._update_memory(op_idx, success)
+        rvns._update_probabilities()
+        p = rvns.probabilities
+        self.assertTrue(all(abs(v - 0.2) < 1e-12 for v in p), p)
+
+    def test_rl_mode_does_learn_away_from_uniform(self):
+        # 反向对照：同样的记忆在 rl 模式下必须偏离等概率，
+        # 否则说明记忆机制根本没生效（测试会变成假阳性）
+        rvns = RVNS(n_operators=5, mode="rl")
+        for op_idx, success in [(0, True), (0, True), (2, False), (3, True)]:
+            rvns._update_memory(op_idx, success)
+        rvns._update_probabilities()
+        p = rvns.probabilities
+        self.assertGreater(abs(p[0] - 0.2), 1e-6, p)
+
+    def test_random_mode_selects_all_operators(self):
+        rvns = RVNS(n_operators=5, mode="random")
+        seen = {int(rvns.select_operator(np.random.RandomState(s))) for s in range(50)}
+        self.assertEqual(seen, {0, 1, 2, 3, 4})
+
+
 if __name__ == "__main__":
     unittest.main()

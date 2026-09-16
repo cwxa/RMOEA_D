@@ -187,6 +187,50 @@ def main():
                 pv = wlx(fh, A(a))
                 print(f"     vs {a:<18} dHV={d.mean():+.5f}  "
                       f"wins={int((d > 0).sum()):>2}/{len(d)}  p={pv:<9.4g} {stars(pv)}")
+
+    # ------------------------------------------------------------------
+    # [4] 组件分解：把「加上局部搜索本身」与「RL 引导选择算子」拆开
+    #     对应论文阶梯 D2 -> D3 -> ... -> RMOEA/D
+    # ------------------------------------------------------------------
+    base = "T10" if "T10" in hv else None
+    if base and "RandVNS" in hv and "RVNSonly" in hv:
+        print("\n" + "=" * 100)
+        print("[4] 组件分解（对齐论文变体阶梯；局部搜索用固定 T=10）")
+        print("=" * 100)
+        pairs = [
+            ("RandVNS", base,      "加上局部搜索本身（算子随机选）"),
+            ("RVNSonly", "RandVNS", "RL 引导选算子 替代 随机选算子"),
+            ("RVNSonly", base,      "加上 RL 局部搜索（合计）"),
+        ]
+        if F:
+            pairs.append((F[0], "RVNSonly", "在已有局部搜索上再加 Q-PAS"))
+        if Q:
+            best_q = max(Q, key=lambda a: A(a).mean())
+            pairs.append((best_q, base, f"Q-PAS 单独（选最优设定 {best_q}）"))
+        # 局部搜索强度对照（若已有该批臂）
+        if "RandVNS_t3" in hv and "RVNSonly_t3" in hv:
+            pairs.append(("RandVNS_t3", base, "加上局部搜索本身（ls_trials=3）"))
+            pairs.append(("RVNSonly_t3", "RandVNS_t3",
+                          "RL 引导选算子 替代 随机选算子（ls_trials=3）"))
+            pairs.append(("RVNSonly_t3", "RVNSonly",
+                          "把每代邻域尝试 1 -> 3 次"))
+            if "Full_t3" in hv:
+                pairs.append(("Full_t3", "RVNSonly_t3",
+                              "在 ls_trials=3 局部搜索上再加 Q-PAS（同强度隔离）"))
+        print(f"{'A 相对 B':<34}{'dHV':<12}{'wins':<10}{'p':<12}{'相对 %':<9}")
+        print("-" * 100)
+        for a, b, note in pairs:
+            if a not in hv or b not in hv:
+                continue
+            va, vb = A(a), A(b)
+            d = va - vb
+            pv = wlx(va, vb)
+            print(f"{a + ' vs ' + b:<34}{d.mean():<+12.5f}"
+                  f"{int((d > 0).sum()):>2}/{len(d):<7}{pv:<12.4g}{stars(pv):<9}"
+                  f"{d.mean() / vb.mean() * 100:+.2f}%   {note}")
+        print("-" * 100)
+        print("注：'加上局部搜索本身' 与 'RL 引导选算子' 是两件事。论文阶梯里")
+        print("    随机 VNS 已在 D3 就位，所以它测到的 RVNS 增益只是后者。")
     return 0
 
 

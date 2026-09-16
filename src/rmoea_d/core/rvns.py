@@ -218,7 +218,7 @@ class RVNS:
     维护成功记忆(SM)和失败记忆(FM)，通过轮盘赌动态选择局部搜索策略。
     """
 
-    def __init__(self, n_operators=5, lp=40, ls_trials=1):
+    def __init__(self, n_operators=5, lp=40, ls_trials=1, mode="rl"):
         """
         Initialize RVNS.
 
@@ -227,10 +227,15 @@ class RVNS:
             lp: Length of success/failure memory (default 40)
             ls_trials: 每个解每代最多尝试的邻域次数（论文 Algorithm 4 为 1，
                        即 first-improvement 的单步 VNS；调大可增强局部搜索强度）
+            mode: "rl"（默认）按 SM/FM 轮盘赌选算子；"random" 等价于论文
+                  Section 4.6 提到的用法 (1)——五个算子等概率随机选，
+                  即论文变体阶梯里的 RMOEA/D3「randomly selection VNS」。
+                  用于把「RL 引导选择」的净贡献从「加上局部搜索本身」里剥离出来。
         """
         self.n_operators = n_operators
         self.lp = lp
         self.ls_trials = max(1, int(ls_trials))
+        self.mode = mode
         # 成功记忆和失败记忆：每个元素是长度为n_operators的列表
         self.success_memory = []  # SM
         self.failure_memory = []  # FM
@@ -317,7 +322,14 @@ class RVNS:
         """
         Recalculate selection probabilities based on SM and FM.
         根据成功/失败记忆重新计算选择概率。
+
+        mode="random" 时保持等概率：算子选择退化为论文的用法 (1)，
+        记忆仍然记录但不再影响选择，因此该配置就是 RMOEA/D3 的随机 VNS。
         """
+        if self.mode == "random":
+            self.probabilities = np.ones(self.n_operators) / self.n_operators
+            return
+
         if not self.success_memory:
             self.probabilities = np.ones(self.n_operators) / self.n_operators
             return

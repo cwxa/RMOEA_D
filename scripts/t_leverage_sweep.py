@@ -40,7 +40,11 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 logging.basicConfig(level=logging.WARNING)
 
 # 实验臂定义：label -> (kind, kwargs)
-#   kind: "fixed" 固定 T | "qpas" 仅 Q-PAS | "full" Q-PAS + RVNS
+#   kind: "fixed"   固定 T（无 Q-PAS、无局部搜索）
+#         "qpas"    仅 Q-PAS（无局部搜索）
+#         "full"    Q-PAS + RVNS
+#         "rvns"    仅局部搜索，算子按 SM/FM 轮盘赌选
+#         "randvns" 仅局部搜索，算子等概率随机选（论文 RMOEA/D3）
 ARM_DEF = {
     # ── 纯 T 效应（关闭 Q-PAS 与 RVNS）──
     "T05":   ("fixed", dict(fixed_T=5)),
@@ -83,6 +87,21 @@ ARM_DEF = {
     "Full3":         ("full", dict(ql_reward_mode="hv", ql_tie_break="random",
                                    ql_q_init="optimistic",
                                    ql_actions=[5, 10, 20, 50])),
+    # ── 论文变体阶梯对齐臂 ──
+    # 论文 RMOEA/D3「randomly selection VNS」：局部搜索在但算子等概率随机选
+    "RandVNS":  ("randvns", dict(fixed_T=10, rvns_mode="random")),
+    # 同窗口对照：局部搜索在、算子由 SM/FM 轮盘赌选（= 论文的 RVNS 选择机制）
+    # RandVNS -> RVNSonly 才是论文阶梯里 D5 -> RMOEA/D 那一步的净贡献
+    "RVNSonly": ("rvns", dict(fixed_T=10)),
+    # ── 局部搜索强度对照 ──
+    # ls_trials=1（论文 Algorithm 4）时算子选择只有一次机会，RL 引导几乎无处发力。
+    # 把每代的邻域尝试次数提到 3，检验「RL 选算子」相对「随机选算子」是否才开始有意义。
+    "RandVNS_t3":   ("randvns", dict(fixed_T=10, rvns_mode="random",
+                                     rvns_ls_trials=3)),
+    "RVNSonly_t3":  ("rvns", dict(fixed_T=10, rvns_ls_trials=3)),
+    # Q-PAS 在强局部搜索下的干净隔离：只有 ls_trials 与 Full 不同，
+    # 否则「Full vs RVNSonly_t3」会把 Q-PAS 与邻域尝试次数的差异混在一起。
+    "Full_t3":      ("full", dict(ql_reward_mode="dv", rvns_ls_trials=3)),
 }
 
 
@@ -91,10 +110,12 @@ def _run_one(job):
     from rmoea_d.algorithm import RMOEAD
 
     extra = dict(kwargs)
-    if kind == "full":
-        extra.update(enable_rvns=True, rvns_ls_trials=1)
+    if kind in ("full", "rvns", "randvns"):
+        # 含局部搜索的臂：Q-PAS 有无由 kwargs 决定
+        extra["enable_rvns"] = True
+        extra.setdefault("rvns_ls_trials", 1)
     else:
-        extra.update(enable_rvns=False)
+        extra["enable_rvns"] = False
 
     solver = RMOEAD(instance_name=instance, n_pop=n_pop, max_gen=max_gen,
                     seed=seed, data_dir=data_dir, **extra)
