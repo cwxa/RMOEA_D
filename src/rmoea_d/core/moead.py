@@ -120,5 +120,5 @@ def moead_generation(population, objectives, weights, B, instance, z, crossover_
                 update_count += 1
 
     elapsed = time.perf_counter() - start_time
-    logger.info("MOEA/D generation completed in %.4f s, neighbor updates=%d", elapsed, update_count)
+    logger.debug("MOEA/D generation completed in %.4f s, neighbor updates=%d", elapsed, update_count)
     return new_pop, [tuple(o) for o in new_obj], tuple(z)

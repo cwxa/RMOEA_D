@@ -66,7 +66,8 @@ RMOEA_D/
 │       └── validate_operators.py        # 算子验证
 │
 ├── scripts/                             # 脚本工具
-│   └── build_ppt.py                     # 自动生成 4 阶段学术汇报 PPT
+│   ├── build_ppt.py                     # 自动生成 4 阶段学术汇报 PPT
+│   └── ablation_analysis.py             # ★ 消融分析 (参考集归一化 HV + 配对检验 + 2×2 因子分解)
 │
 ├── tests/                               # 单元测试
 │   └── test_refactor.py                 # 重构验证 (MOEA/D 继承关系、Q-learning 策略、结果字段)
@@ -209,7 +210,38 @@ python scripts\build_ppt.py --phase 1   # 背景与问题
 python scripts\build_ppt.py --phase 2   # 算法方法
 python scripts\build_ppt.py --phase 3   # 实验设计
 python scripts\build_ppt.py --phase 4   # 结果分析
+
+# 消融结果分析 (参考集归一化 HV + 配对检验 + 2×2 因子分解)
+python scripts\ablation_analysis.py --results_dir results\experiment --instance mk01
 ```
+
+---
+
+## HV 归一化口径（重要）
+
+跨算法比较 HV **必须**用同一套归一化边界，否则指标不可比。本项目统一采用
+**参考集归一化（reference-set normalization）**：
+
+1. 求解器内联用 `instance_hv_bounds(instance)` 由实例数据确定性推出边界
+   （同一实例所有 run / 所有算法共用，结果 JSON 的 `hv_bounds` 字段）；
+2. 统一实验跑完后，`experiment._retune_hv_reference_set()` 再用
+   **该实例所有变体、所有 run 的前沿并集** 重算一次 `final_hv`，
+   并写入 `hv_norm_bounds` / `hv_ref_point` / `hv_definition` 字段。
+
+不要把 `final_hv` 与「用每条前沿自己的 min/max 归一化」得到的数值混用——
+后者会把任意前沿拉伸到单位盒，指标对整体优劣不敏感，**无法区分算法优劣**。
+
+## Q-PAS 奖励模式（`ql_reward_mode`）
+
+| 值 | 奖励定义 | 说明 |
+|----|----------|------|
+| `"dv"` | ΔDV > 0 → 10，否则 0 | **默认**，严格照论文式 (20) |
+| `"cv_dv"` | ΔCV>0 与 ΔDV>0 各计 5 分 | 把收敛性纳入奖励 |
+| `"hv"` | ΔHV > 0 → 10，否则 0 | 奖励直接对齐最终评价指标 |
+
+三种模式在 Mk01 上的 A/B 对比均无显著差异（Friedman p=0.86）——
+根因是「邻域大小 T」在该实例上是弱杠杆（T 扫参 p=0.15），而非奖励设计问题。
+详见 `docs/ablation-qpas-rvns-diagnosis.md`。
 
 ---
 

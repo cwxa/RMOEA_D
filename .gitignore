@@ -1,5 +1,6 @@
 *.pyc
 *.log
+/logs
 /results
 /charts
 /src/rmoea_d.egg-info

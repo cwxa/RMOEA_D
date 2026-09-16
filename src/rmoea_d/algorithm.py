@@ -28,7 +28,7 @@ from .core.encoding import decode, decode_with_schedule, decode_crisp
 from .core.moead import generate_weights, compute_neighbors, moead_generation
 from .core.qlearning import QLearningPAS
 from .core.rvns import RVNS, rvns_generation
-from .utils.metrics import non_dominated_sort, compute_hv
+from .utils.metrics import non_dominated_sort, compute_hv, instance_hv_bounds
 from .core.fuzzy import fuzzy_dominates
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,10 @@ class RMOEAD:
         ql_gamma=0.6,
         ql_epsilon=0.8,
         ql_actions=None,
+        ql_reward_mode="dv",
         enable_rvns=True,
+        rvns_lp=40,
+        rvns_ls_trials=1,
         fixed_T=None,
         timeout=None,
         algorithm_name="RMOEA/D",
@@ -74,6 +77,8 @@ class RMOEAD:
             ql_epsilon: Q-learning epsilon for exploration
             ql_actions: List of candidate T values
             enable_rvns: Whether to enable RVNS local search
+            rvns_lp: RVNS 成功/失败记忆窗口长度 LP
+            rvns_ls_trials: RVNS 每个解每代最多尝试的邻域次数 (论文为 1)
             fixed_T: Fixed neighborhood size (if None, use Q-learning)
             timeout: Maximum wall-clock time in seconds (None = no limit)
             algorithm_name: Algorithm name for result metadata
@@ -96,9 +101,13 @@ class RMOEAD:
         self.ql_gamma = ql_gamma
         self.ql_epsilon = ql_epsilon
         self.ql_actions = ql_actions if ql_actions is not None else [5, 10, 15, 20]
+        self.ql_reward_mode = ql_reward_mode
 
         # RVNS parameters
-        self.rvns = RVNS(n_operators=5, lp=40) if enable_rvns else None
+        self.rvns_lp = rvns_lp
+        self.rvns_ls_trials = rvns_ls_trials
+        self.rvns = (RVNS(n_operators=5, lp=rvns_lp, ls_trials=rvns_ls_trials)
+                     if enable_rvns else None)
 
         # Internal state
         self.rng = np.random.RandomState(seed)
@@ -110,7 +119,8 @@ class RMOEAD:
 
         logger.info("%s | %s | Np=%d G=%d | %s | %s",
                     algorithm_name, instance_name, n_pop, max_gen,
-                    f"QL(T={self.ql_actions})" if fixed_T is None else f"FixedT={fixed_T}",
+                    f"QL(T={self.ql_actions},R={self.ql_reward_mode})"
+                    if fixed_T is None else f"FixedT={fixed_T}",
                     "RVNS" if enable_rvns else "noRVNS")
         logger.debug("Seed=%d CR=%.2f alpha=%.2f gamma=%.2f epsilon=%.2f",
                      seed, crossover_rate, ql_alpha, ql_gamma, ql_epsilon)
@@ -172,6 +182,12 @@ class RMOEAD:
                     self.instance["n_jobs"], self.instance["n_machines"],
                     self.instance["total_ops"])
 
+        # 固定的 HV 归一化边界（由实例数据确定性推出）
+        # → 同一实例下所有 run / 所有算法变体共用，HV 才可直接比较
+        self.hv_bounds = instance_hv_bounds(self.instance)
+        logger.debug("HV normalization bounds: lo=%s hi=%s",
+                     self.hv_bounds[0].tolist(), self.hv_bounds[1].tolist())
+
         # Initialize weights
         self.weights = generate_weights(self.n_pop)
         logger.debug("Weight vectors generated: %d vectors", len(self.weights))
@@ -183,6 +199,8 @@ class RMOEAD:
                 gamma=self.ql_gamma,
                 epsilon=self.ql_epsilon,
                 actions=self.ql_actions,
+                reward_mode=self.ql_reward_mode,
+                hv_bounds=self.hv_bounds,
             )
         else:
             self.ql = None
@@ -243,7 +261,7 @@ class RMOEAD:
             archive_size = self._update_archive(population, objectives)
 
             # Step 6: Compute HV
-            hv = compute_hv(pf)
+            hv = compute_hv(pf, norm_bounds=self.hv_bounds)
 
             gen_time = time.perf_counter() - gen_start
 
@@ -293,7 +311,7 @@ class RMOEAD:
         # Final results (crisp PF for HV computation)
         final_pf = [(item[2][0], item[2][1]) for item in self.archive]
         final_pf = non_dominated_sort(final_pf)
-        final_hv = compute_hv(final_pf)
+        final_hv = compute_hv(final_pf, norm_bounds=self.hv_bounds)
 
         # Fuzzy PF for output using paper's ranking-based dominance
         # 使用论文排序算子进行模糊非支配排序
@@ -351,11 +369,15 @@ class RMOEAD:
             "final_pf": named_pf,
             "fuzzy_pf": named_fuzzy_pf,
             "final_hv": final_hv,
+            # HV 的固定归一化边界 (lo, hi)——同一实例内所有 run/算法共用，
+            # 保证 HV 可跨算法比较
+            "hv_bounds": [self.hv_bounds[0].tolist(), self.hv_bounds[1].tolist()],
             "total_time": total_time,
             "timed_out": self.timeout is not None and total_time > self.timeout,
             "timeout": self.timeout,
             "history": self.history,
             "q_table": self.ql.q_table.tolist() if self.ql else None,
+            "ql_reward_mode": self.ql_reward_mode if self.ql else None,
             "rvns_final_probs": self.rvns.get_probabilities() if self.rvns else None,
             # ── 调度过程数据 (用于甘特图和结果分析) ──
             "schedules": best_schedules,

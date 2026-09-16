@@ -127,7 +127,7 @@ def _extract_run(r, algo, instance, seed, n_pop, max_gen, elapsed, ql_params=Non
 
 
 def run_single(instance, n_pop, max_gen, seed, crossover_rate, fixed_T,
-               data_dir, ql_params=None):
+               data_dir, ql_params=None, rvns_ls_trials=1):
     """一次运行产出 4 种算法变体——benchmark + ablation 数据一举拿下。
     
     Returns:
@@ -145,7 +145,7 @@ def run_single(instance, n_pop, max_gen, seed, crossover_rate, fixed_T,
         crossover_rate=crossover_rate, seed=seed, data_dir=data_dir,
         ql_alpha=ql_params["alpha"], ql_gamma=ql_params["gamma"],
         ql_epsilon=ql_params["epsilon"], ql_actions=ql_params["actions"],
-        enable_rvns=True)
+        enable_rvns=True, rvns_ls_trials=rvns_ls_trials)
     r = solver.solve()
     results["rmoea_d"] = _extract_run(r, "rmoea_d", instance, seed, n_pop, max_gen,
                                        time.perf_counter() - t0, ql_params)
@@ -167,7 +167,7 @@ def run_single(instance, n_pop, max_gen, seed, crossover_rate, fixed_T,
     solver = RMOEAD(
         instance_name=instance, n_pop=n_pop, max_gen=max_gen,
         crossover_rate=crossover_rate, seed=seed, data_dir=data_dir,
-        fixed_T=fixed_T, enable_rvns=True)
+        fixed_T=fixed_T, enable_rvns=True, rvns_ls_trials=rvns_ls_trials)
     r = solver.solve()
     results["rvns_only"] = _extract_run(r, "rvns_only", instance, seed, n_pop, max_gen,
                                          time.perf_counter() - t0)
@@ -192,13 +192,15 @@ def run_single(instance, n_pop, max_gen, seed, crossover_rate, fixed_T,
 def _worker(args_tuple):
     """进程池 worker：运行单次统一实验 (picklable 顶层函数)。"""
     (instance, n_pop, max_gen, seed, crossover_rate, fixed_T,
-     data_dir, ql_alpha, ql_gamma, ql_epsilon, ql_actions) = args_tuple
+     data_dir, ql_alpha, ql_gamma, ql_epsilon, ql_actions,
+     rvns_ls_trials) = args_tuple
     ql_params = {
         "alpha": ql_alpha, "gamma": ql_gamma,
         "epsilon": ql_epsilon, "actions": list(ql_actions),
     }
     return run_single(instance, n_pop, max_gen, seed, crossover_rate,
-                      fixed_T, data_dir, ql_params)
+                      fixed_T, data_dir, ql_params,
+                      rvns_ls_trials=rvns_ls_trials)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -209,7 +211,7 @@ def run_experiment(instances, n_pop, max_gen, n_runs, base_seed,
                    crossover_rate, fixed_T, data_dir, output_dir,
                    ql_alpha=0.4, ql_gamma=0.6, ql_epsilon=0.8,
                    ql_actions=None, n_workers=None, exp_id=None,
-                   timeout_per_task=None):
+                   timeout_per_task=None, rvns_ls_trials=1):
     """统一实验：并行运行所有 instance × seed 任务，每个任务产出 4 种算法。
     
     Returns:
@@ -235,7 +237,8 @@ def run_experiment(instances, n_pop, max_gen, n_runs, base_seed,
         for run_idx in range(n_runs):
             seed = base_seed + run_idx
             tasks.append((inst, n_pop, max_gen, seed, crossover_rate, fixed_T,
-                          data_dir, ql_alpha, ql_gamma, ql_epsilon, tuple(ql_actions)))
+                          data_dir, ql_alpha, ql_gamma, ql_epsilon, tuple(ql_actions),
+                          rvns_ls_trials))
 
     logger.info("Unified experiment: %d instances x %d runs x 4 algos = %d tasks → %d workers",
                 len(instances), n_runs, len(tasks), n_workers)
@@ -282,6 +285,9 @@ def run_experiment(instances, n_pop, max_gen, n_runs, base_seed,
     if timed_out > 0:
         logger.warning("%d/%d tasks timed out or errored", timed_out, len(tasks))
 
+    # ── 用「参考集」口径统一重算 HV ──
+    _retune_hv_reference_set(all_runs)
+
     # ── 最终保存 ──
     _save_per_run(all_runs, output_dir, exp_id)
 
@@ -290,6 +296,62 @@ def run_experiment(instances, n_pop, max_gen, n_runs, base_seed,
     _save_aggregate(agg, output_dir, exp_id)
 
     return all_runs, agg
+
+
+def _retune_hv_reference_set(all_runs, ref_point=(1.02, 1.02)):
+    """把所有 run 的 `final_hv` 统一重算为「参考集归一化」口径。
+
+    为什么必须重算：
+      * `compute_hv` 在未给 norm_bounds 时用「每条前沿自己的 min/max」归一化，
+        这会把任意前沿拉伸到单位盒，指标对整体优劣不敏感（只反映前沿形状），
+        无法用于比较算法；
+      * 求解器内联的 `instance_hv_bounds` 虽然固定可比，但 makespan 上界取
+        「全部工序最长时间之和」，远松于真实取值，HV 分辨率被压扁（实测
+        四个变体差异仅 ~0.002）。
+    这里改用「同一实例下所有变体、所有 run 的前沿并集」作为归一化盒——
+    这是多算法比较 HV 的标准做法，同实例内 HV 严格可比。
+    """
+    from rmoea_d.utils.metrics import compute_hv, estimate_hv_bounds
+
+    for inst, runs in all_runs.items():
+        fronts = []
+        for rd in runs:
+            for algo in ABLATION_ALGOS:
+                r = rd.get(algo)
+                if not r:
+                    continue
+                pf = r.get("final_pf") or []
+                if not pf:
+                    continue
+                if isinstance(pf[0], dict):
+                    fronts.append([[p["Makespan"], p["Workload"]] for p in pf])
+                else:
+                    fronts.append([[p[0], p[1]] for p in pf])
+        if not fronts:
+            continue
+
+        lo, hi = estimate_hv_bounds(fronts)
+        for rd in runs:
+            for algo in ABLATION_ALGOS:
+                r = rd.get(algo)
+                if not r:
+                    continue
+                pf = r.get("final_pf") or []
+                if not pf:
+                    r["final_hv"] = 0.0
+                    continue
+                if isinstance(pf[0], dict):
+                    pts = [[p["Makespan"], p["Workload"]] for p in pf]
+                else:
+                    pts = [[p[0], p[1]] for p in pf]
+                r["final_hv"] = compute_hv(pts, ref_point=ref_point,
+                                           norm_bounds=(lo, hi))
+                r["hv_norm_bounds"] = [lo.tolist(), hi.tolist()]
+                r["hv_ref_point"] = list(ref_point)
+                r["hv_definition"] = ("reference-set normalization "
+                                      "(union of all runs of this instance)")
+        logger.info("HV re-tuned [%s]: lo=%s hi=%s (reference-set normalization)",
+                    inst, lo.round(2).tolist(), hi.round(2).tolist())
 
 
 # ═══════════════════════════════════════════════════════════
@@ -601,6 +663,8 @@ Examples:
     parser.add_argument("--ql_gamma", type=float, default=0.6)
     parser.add_argument("--ql_epsilon", type=float, default=0.8)
     parser.add_argument("--ql_actions", type=int, nargs="+", default=[5, 10, 15, 20])
+    parser.add_argument("--rvns_ls_trials", type=int, default=1,
+                        help="RVNS 每个解每代最多尝试的邻域次数 (论文 Algorithm 4 为 1)")
     parser.add_argument("--study", type=str, default="all",
                         choices=["all", "benchmark", "ablation"],
                         help="Which study to run (default: all)")
@@ -632,6 +696,7 @@ Examples:
         n_workers=args.n_workers,
         exp_id=exp_id,
         timeout_per_task=args.timeout_per_task,
+        rvns_ls_trials=args.rvns_ls_trials,
     )
 
     if args.n_runs > 2:

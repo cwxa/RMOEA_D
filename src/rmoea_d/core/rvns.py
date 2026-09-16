@@ -218,16 +218,19 @@ class RVNS:
     维护成功记忆(SM)和失败记忆(FM)，通过轮盘赌动态选择局部搜索策略。
     """
 
-    def __init__(self, n_operators=5, lp=40):
+    def __init__(self, n_operators=5, lp=40, ls_trials=1):
         """
         Initialize RVNS.
 
         Parameters:
             n_operators: Number of local search operators (default 5)
             lp: Length of success/failure memory (default 40)
+            ls_trials: 每个解每代最多尝试的邻域次数（论文 Algorithm 4 为 1，
+                       即 first-improvement 的单步 VNS；调大可增强局部搜索强度）
         """
         self.n_operators = n_operators
         self.lp = lp
+        self.ls_trials = max(1, int(ls_trials))
         # 成功记忆和失败记忆：每个元素是长度为n_operators的列表
         self.success_memory = []  # SM
         self.failure_memory = []  # FM
@@ -245,35 +248,49 @@ class RVNS:
                             old_mc=None, old_wc=None):
         """
         Apply one local search operator to a solution.
-        对单个解应用一次局部搜索。
+        对单个解应用局部搜索（论文 Algorithm 4）。
+
+        接受准则按论文 Algorithm 4 第 3 行，用**子问题的 Tchebycheff 标量化值**：
+
+            g^te(P' | λ, Z*) < g^te(P | λ, Z*)   →   更新解 P ← P'
+
+        注意：这里**不能**用 Pareto 支配判定。双目标下，一个随机邻域同时不劣化
+        两个目标的概率极低，支配判定会导致局部搜索在种群收敛后完全空转
+        （实测接受率很快降到 0/100 并保持到结束）。λ 与 Z* 正是为此传入的。
 
         优化：接收已知旧解 crisp 值，消除热路径中重复的 decode 调用。
         """
-        op_idx = self.select_operator(rng)
-        ls_func = LOCAL_SEARCH_OPERATORS[op_idx]
+        from .moead import tchebycheff  # 局部导入：避免模块级循环依赖
 
-        # Generate neighbor
-        new_os, new_ma = ls_func(os_vec, ma_vec, instance, rng)
-
-        # 修复MA合法性（OS变化后MA可能不合法，始终调用）
-        # 注：ls4/ls5可能交换同工件不同工序的位置，此时OS列表不变但MA变化，仍需修复
-        new_ma = _repair_ma_for_os(new_os, new_ma, instance, rng)
-
-        # Evaluate: 旧值复用入参，新值用 decode_crisp（零分配）
         if old_mc is None or old_wc is None:
             old_mc, old_wc = decode_crisp(os_vec, ma_vec, instance)
-        new_mc, new_wc = decode_crisp(new_os, new_ma, instance)
 
-        # Check if new solution dominates old solution
-        success = (new_mc < old_mc and new_wc <= old_wc) or (new_mc <= old_mc and new_wc < old_wc)
+        old_g = tchebycheff((old_mc, old_wc), weight, z)
 
-        # Update memories
-        self._update_memory(op_idx, success)
+        for _ in range(self.ls_trials):
+            op_idx = self.select_operator(rng)
+            ls_func = LOCAL_SEARCH_OPERATORS[op_idx]
 
-        if success:
-            return new_os, new_ma, True
-        else:
-            return os_vec, ma_vec, False
+            # Generate neighbor
+            new_os, new_ma = ls_func(os_vec, ma_vec, instance, rng)
+
+            # 修复MA合法性（OS变化后MA可能不合法，始终调用）
+            new_ma = _repair_ma_for_os(new_os, new_ma, instance, rng)
+
+            # Evaluate: 旧值复用入参，新值用 decode_crisp（零分配）
+            new_mc, new_wc = decode_crisp(new_os, new_ma, instance)
+
+            # 子问题标量化值是否改善（越小越好）
+            new_g = tchebycheff((new_mc, new_wc), weight, z)
+            success = new_g < old_g - 1e-12
+
+            # Update memories
+            self._update_memory(op_idx, success)
+
+            if success:
+                return new_os, new_ma, True
+
+        return os_vec, ma_vec, False
 
     def _update_memory(self, op_idx, success):
         """
@@ -376,6 +393,6 @@ def rvns_generation(population, objectives, weights, instance, z, rng, rvns):
     # 代末统一更新概率（从 3000 次 → 30 次调用）
     rvns._update_probabilities()
 
-    logger.info("RVNS generation completed: %d/%d solutions improved",
-                success_count, len(population))
+    logger.debug("RVNS generation completed: %d/%d solutions improved",
+                 success_count, len(population))
     return new_pop, [tuple(o) for o in new_obj], tuple(z)
