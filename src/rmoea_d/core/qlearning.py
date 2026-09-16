@@ -19,30 +19,59 @@ class QLearningPAS:
     "dv"        论文原始口径：ΔDV > 0 → 10，否则 0
     "cv_dv"     ΔCV>0 与 ΔDV>0 各计 5 分（把收敛性也纳入奖励）
     "hv"        ΔHV > 0 → 10，否则 0（奖励直接对齐最终评价指标）
+    "hv_cont"   连续奖励 ΔHV×100（可负，裁到 ±10）——保留改善的**幅度**信息，
+                而非只保留符号。实测 Mk10 上二值 "hv" 的 T 分布仍偏小 T。
     ==========  =================================================
 
     背景：论文式(20) 只奖励「间距指标 DV 变大」。实测在 Mk01 上该信号会把
     策略推向恒选 T=5（论文 Table 3 的丰富策略 [5,15,20] 无法复现），而
     固定 T=5 的最终 HV 明显劣于 T=10。原因是 DV 是「间距均匀度」，
     与 HV 并不单调一致——奖励目标与优化目标错位。
+
+    ``tie_break`` 控制「多个动作 Q 值并列最大」时的选择方式：
+
+    ==========  =====================================================
+    "random"    在并列最优的动作中随机挑一个（默认，标准做法）
+    "argmax"    固定取索引最小的（np.argmax 原生行为，保留以复现旧结果）
+    ==========  =====================================================
+
+    **为什么必须随机**：Q 表零初始化时全表 Q=0，``np.argmax`` 一律返回
+    索引 0，即 ``actions[0]``。在论文的 ε=0.8（80% 利用）下，前期几乎所有
+    决策都落到该动作上，而一旦它获得奖励就进一步被强化 —— 策略自锁。
+    实测 Mk10（T 是强杠杆的实例）上，argmax 平局口径有 **47%~53% 的代数
+    停在最差的 T=5**；即便把最优的 T=50 放进候选集，它也只被选中 16.8%。
+    平局随机化打破该偏置后，Q-PAS 才可能真正学到「选大 T」。
     """
 
     def __init__(self, alpha=0.4, gamma=0.6, epsilon=0.8, actions=None,
                  reward_mode="dv", hv_bounds=None,
-                 w_cv=5.0, w_dv=5.0, w_hv=10.0):
+                 w_cv=5.0, w_dv=5.0, w_hv=10.0,
+                 w_hv_cont=100.0, w_hv_clip=10.0,
+                 tie_break="random", q_init="zero", q_init_scale=0.1):
         self.alpha = alpha
         self.gamma = gamma
         self.epsilon = epsilon
         self.actions = actions if actions is not None else [5, 10, 15, 20]
         self.n_actions = len(self.actions)
         self.n_states = 4
-        self.q_table = np.zeros((self.n_states, self.n_actions))
+        self.tie_break = tie_break
+        self.q_init = q_init
+        if q_init == "optimistic":
+            # 乐观初始化：同样用于打破「全零 → 恒取索引 0」的对称性。
+            # 用固定种子保证可复现（后续 update 会按奖励把各动作分化开）。
+            _r = np.random.RandomState(20240916)
+            self.q_table = _r.uniform(0.0, q_init_scale,
+                                      size=(self.n_states, self.n_actions))
+        else:
+            self.q_table = np.zeros((self.n_states, self.n_actions))
         # ── 奖励设定 ──
         self.reward_mode = reward_mode
         self.hv_bounds = hv_bounds
         self.w_cv = w_cv
         self.w_dv = w_dv
         self.w_hv = w_hv
+        self.w_hv_cont = w_hv_cont
+        self.w_hv_clip = w_hv_clip
         # ── 状态缓存 ──
         self.prev_cv = None
         self.prev_dv = None
@@ -116,6 +145,11 @@ class QLearningPAS:
             if self.prev_hv is None or cur_hv is None:
                 return 0.0
             return self.w_hv if (cur_hv - self.prev_hv) > 0 else 0.0
+        if self.reward_mode == "hv_cont":
+            if self.prev_hv is None or cur_hv is None:
+                return 0.0
+            return float(np.clip((cur_hv - self.prev_hv) * self.w_hv_cont,
+                                 -self.w_hv_clip, self.w_hv_clip))
         if self.reward_mode == "cv_dv":
             return (self.w_cv if delta_cv > 0 else 0.0) + \
                    (self.w_dv if delta_dv > 0 else 0.0)
@@ -135,9 +169,18 @@ class QLearningPAS:
         目的是让实验中的 ε 取值更直观。因此 ε = 0.8 的含义是
         **80% 利用、20% 探索**——若把分支写反（rand < ε 时随机），
         在 ε = 0.8 下会退化成 80% 随机，Q-table 基本学不到东西。
+
+        利用分支里，论文未规定 Q 值并列时的取舍。这里默认 **并列随机**
+        （``tie_break="random"``）——因为 Q 表初值为 0，若固定取索引 0，
+        在 ε 很大时会把整个搜索锁死在 ``actions[0]`` 上。
         """
         if rng.rand() < self.epsilon:
-            return int(np.argmax(self.q_table[state]))
+            q = self.q_table[state]
+            mx = q.max()
+            best = np.flatnonzero(q >= mx - 1e-12)
+            if len(best) == 1 or self.tie_break != "random":
+                return int(best[0])
+            return int(best[rng.randint(len(best))])
         return int(rng.randint(self.n_actions))
 
     def get_T(self, action_idx):
@@ -158,7 +201,8 @@ class QLearningPAS:
         Returns: selected T, is_first_step
         """
         cv, dv = self.compute_cv_dv(pf)
-        cur_hv = self._front_hv(pf) if self.reward_mode == "hv" else None
+        cur_hv = (self._front_hv(pf)
+                  if self.reward_mode in ("hv", "hv_cont") else None)
 
         if self.prev_cv is None:
             # First generation

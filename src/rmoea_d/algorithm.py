@@ -53,6 +53,9 @@ class RMOEAD:
         ql_epsilon=0.8,
         ql_actions=None,
         ql_reward_mode="dv",
+        ql_tie_break="random",
+        ql_q_init="zero",
+        ql_q_init_scale=0.1,
         enable_rvns=True,
         rvns_lp=40,
         rvns_ls_trials=1,
@@ -102,6 +105,10 @@ class RMOEAD:
         self.ql_epsilon = ql_epsilon
         self.ql_actions = ql_actions if ql_actions is not None else [5, 10, 15, 20]
         self.ql_reward_mode = ql_reward_mode
+        # 平局处理：Q 表初值并列时若固定取索引 0，会把策略锁死在 actions[0]
+        self.ql_tie_break = ql_tie_break
+        self.ql_q_init = ql_q_init
+        self.ql_q_init_scale = ql_q_init_scale
 
         # RVNS parameters
         self.rvns_lp = rvns_lp
@@ -201,6 +208,9 @@ class RMOEAD:
                 actions=self.ql_actions,
                 reward_mode=self.ql_reward_mode,
                 hv_bounds=self.hv_bounds,
+                tie_break=self.ql_tie_break,
+                q_init=self.ql_q_init,
+                q_init_scale=self.ql_q_init_scale,
             )
         else:
             self.ql = None

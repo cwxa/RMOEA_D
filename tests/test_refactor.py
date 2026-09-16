@@ -209,12 +209,65 @@ class TestQlearningRewardModes(unittest.TestCase):
         self.assertEqual(ql._compute_reward(0.0, 0.0, cur_hv=0.6), 10.0)
         self.assertEqual(ql._compute_reward(0.0, 0.0, cur_hv=0.4), 0.0)
 
+    def test_reward_hv_cont(self):
+        ql = QLearningPAS(reward_mode="hv_cont", w_hv_cont=100.0, w_hv_clip=10.0)
+        self.assertEqual(ql._compute_reward(0.0, 0.0), 0.0)          # 首次无 prev_hv
+        ql.prev_hv = 0.5
+        self.assertAlmostEqual(ql._compute_reward(0.0, 0.0, cur_hv=0.51), 1.0)
+        self.assertAlmostEqual(ql._compute_reward(0.0, 0.0, cur_hv=0.49), -1.0)
+        self.assertEqual(ql._compute_reward(0.0, 0.0, cur_hv=0.90), 10.0)   # 上裁
+        self.assertEqual(ql._compute_reward(0.0, 0.0, cur_hv=0.10), -10.0)  # 下裁
+
     def test_front_hv_uses_shared_bounds(self):
         ql = QLearningPAS(reward_mode="hv", hv_bounds=([0.0, 0.0], [10.0, 10.0]))
         front = np.array([[2.0, 2.0], [4.0, 1.0]])
         hv = ql._front_hv(front)
         self.assertGreater(hv, 0.0)
         self.assertLessEqual(hv, 1.0)          # 归一化后不超过单位盒
+
+
+class TestQlearningTieBreak(unittest.TestCase):
+    """回归测试：Q 表并列最大时必须能随机打破平局。
+
+    Q 表零初始化时全表 Q=0，若利用分支固定取索引 0（np.argmax 原生行为），
+    在论文的 ε=0.8（80% 利用）下策略会自锁到 actions[0]。实测 Mk10 上
+    该缺陷使 47%~53% 的代数停在最差的 T=5，Q-PAS 因此全面劣于固定 T。
+    """
+
+    def test_zero_table_random_tie_break_covers_all_actions(self):
+        ql = QLearningPAS(epsilon=1.0, actions=[5, 10, 15, 20],
+                          tie_break="random")
+        rng = np.random.RandomState(0)
+        picks = [ql.select_action(0, rng) for _ in range(600)]
+        # 全零表 + 纯利用 ⇒ 应在所有并列动作间均匀随机，而非恒取 0
+        self.assertEqual(set(picks), {0, 1, 2, 3},
+                         "并列时必须能随机覆盖所有动作，否则会自锁到 actions[0]")
+
+    def test_zero_table_argmax_is_locked_to_index0(self):
+        """记录旧口径的缺陷：全零表 + 纯利用 ⇒ 100% 停在索引 0。"""
+        ql = QLearningPAS(epsilon=1.0, actions=[5, 10, 15, 20],
+                          tie_break="argmax")
+        rng = np.random.RandomState(0)
+        picks = [ql.select_action(0, rng) for _ in range(200)]
+        self.assertEqual(set(picks), {0})
+
+    def test_unique_max_still_deterministic(self):
+        ql = QLearningPAS(epsilon=1.0, actions=[5, 10, 15, 20])
+        ql.q_table[0] = [0.0, 0.0, 7.7, 0.0]
+        rng = np.random.RandomState(1)
+        picks = [ql.select_action(0, rng) for _ in range(100)]
+        self.assertEqual(set(picks), {2}, "唯一最大时不应受平局随机影响")
+
+    def test_optimistic_init_breaks_symmetry(self):
+        ql = QLearningPAS(actions=[5, 10, 15, 20], q_init="optimistic")
+        self.assertFalse(np.allclose(ql.q_table, 0.0))
+        self.assertEqual(ql.q_table.shape, (4, 4))
+        # 固定种子 ⇒ 可复现
+        ql2 = QLearningPAS(actions=[5, 10, 15, 20], q_init="optimistic")
+        np.testing.assert_allclose(ql.q_table, ql2.q_table)
+
+    def test_default_tie_break_is_random(self):
+        self.assertEqual(QLearningPAS().tie_break, "random")
 
 
 class TestHypervolumeNormalization(unittest.TestCase):
