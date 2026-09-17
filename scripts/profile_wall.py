@@ -9,8 +9,10 @@
 
 **怎么读**
 
-`cum%` 是"含子调用的总占比"，会重叠（例如 decode_crisp 同时被 rvns/moead 调用）。
-`self估计` = 总耗时 − 已单独计时的子函数耗时，用于近似自身成本。
+* `总耗时s` = **含子调用**的真实累计耗时（会重叠：`decode_crisp` 同时被 rvns/moead 调用）。
+* `自身s`   = 总耗时 **减去**已单独计时的子函数耗时，即函数体本身的开销。
+* `调用数` 是最要紧的一列：**次数没变而耗时掉了** = 单次成本优化（等价改写成功）；
+  **次数掉了** = 消掉了冗余计算（需要额外证明那部分确实冗余）。
 
 用法：
     python scripts/profile_wall.py --instance Mk10 --max_gen 60
@@ -24,45 +26,56 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 
 class Timer:
+    """只在函数边界插桩的墙钟计时器。
+
+    `d[label] = [总耗时, 调用数, 自身耗时]`。自身耗时靠"父扣子"算：
+    每次进入函数压一个 0.0 到 stack，返回时把本次 dt 加到栈顶（父级），
+    于是 `父的自身 = 父的 dt − 已计入的子调用 dt`。
+    """
+
     def __init__(self):
-        self.d = {}          # name -> [total, calls]
-        self.stack = []      # 当前调用链（用于算自身耗时）
+        self.d = {}          # name -> [total, calls, self]
+        self.stack = []      # 每层累积"子调用耗时"
 
     def wrap_module(self, mod, name, label=None):
         orig = getattr(mod, name, None)
         if orig is None:
             return False
         label = label or ("%s.%s" % (mod.__name__.split(".")[-1], name))
-        rec = self.d.setdefault(label, [0.0, 0])
         tim = self
 
         def timed(*a, **k):
             t0 = time.perf_counter()
-            tim.stack.append(label)
+            tim.stack.append(0.0)
             try:
                 return orig(*a, **k)
             finally:
-                tim.stack.pop()
                 dt = time.perf_counter() - t0
-                rec[0] += dt
-                rec[1] += 1
-                # 把这段耗时从所有祖先的"自身耗时"里扣掉
-                sub = tim.d.setdefault(label + "#self", [0.0, 0])
-                sub[0] += dt
+                child = tim.stack.pop()
+                if tim.stack:
+                    tim.stack[-1] += dt      # 记到父级的"子调用"里
+                tot, n, slf = tim.d.get(label, (0.0, 0, 0.0))
+                tim.d[label] = (tot + dt, n + 1, slf + (dt - child))
 
         timed.__name__ = name
         setattr(mod, name, timed)
         return True
 
+    def reset(self):
+        for k in self.d:
+            t, n, s = self.d[k]
+            self.d[k] = (0.0, 0, 0.0)
+
     def report(self, total_wall, top=20):
         print()
-        print("%-38s %9s %8s %9s %10s" % ("函数", "总耗时s", "调用数", "占比%", "us/call"))
-        print("-" * 80)
+        print("%-38s %9s %9s %8s %9s %10s" % ("函数", "总耗时s", "自身s",
+                                              "调用数", "占比%", "us/call"))
+        print("-" * 92)
         rows = sorted(self.d.items(), key=lambda kv: -kv[1][0])
-        for name, (t, c) in rows[:top]:
-            print("%-38s %9.3f %8d %8.2f%% %10.2f"
-                  % (name, t, c, 100.0 * t / total_wall, 1e6 * t / max(c, 1)))
-        print("-" * 80)
+        for name, (t, c, s) in rows[:top]:
+            print("%-38s %9.3f %9.3f %8d %8.2f%% %10.2f"
+                  % (name, t, s, c, 100.0 * t / total_wall, 1e6 * t / max(c, 1)))
+        print("-" * 92)
         print("总墙钟 %.3fs" % total_wall)
 
 
@@ -113,9 +126,7 @@ def main():
         return s.solve()
 
     run()                       # warm
-    for k in t.d.values():
-        k[0] = 0.0
-        k[1] = 0
+    t.reset()
     t0 = time.perf_counter()
     res = run()
     wall = time.perf_counter() - t0

@@ -103,23 +103,33 @@ def _hv_table(labs):
 # ══════════════════════════════ 01 加速对照 ══════════════════════════════
 
 def _parse_profile(rel):
-    """解析 profile_wall.py 的输出表。
+    """解析 profile_wall.py 的输出表 -> {函数名: (总耗时s, 自身s, 调用数)}。
 
-    注意：函数名里**可能含空格**（如 `moead._repair_ma_for_os(from ops)`）。
-    早前的 `^(\\S+)\\s+...` 会把这些行整条漏掉 —— 于是图上恰好少了
-    **收益最大的那一项**。这里改成非贪婪名字 + 多空格分隔。
+    两个坑：
+    1. 函数名里**可能含空格**（如 `moead._repair_ma_for_os(from ops)`）。
+       早前的 `^(\\S+)\\s+...` 会把这些行整条漏掉 —— 于是图上恰好少了
+       **收益最大的那一项**。这里改成按「2 个以上空格」切列。
+    2. 输出表有**新旧两种列数**：
+       旧 `总耗时s 调用数 占比% us/call`（5 列）
+       新 `总耗时s 自身s 调用数 占比% us/call`（6 列，2026-09-17 起）
+       若只按位置取列，新格式会把**自身耗时**当成总耗时、把总耗时当成调用数 —— 静默错。
     """
     p = rel if os.path.isabs(rel) else os.path.join(ROOT, rel)
     if not os.path.exists(p):
         return {}
     out = {}
-    pat = re.compile(r"^(.+?)\s+([\d.]+)\s+(\d+)\s+([\d.]+)%\s+([\d.]+)\s*$")
     for line in open(p, encoding="utf-8"):
-        if "#self" in line:
+        cols = [c for c in re.split(r"\s{2,}", line.rstrip()) if c]
+        if len(cols) == 5:            # 旧格式
+            name, tot, calls = cols[0], cols[1], cols[2]
+        elif len(cols) >= 6:         # 新格式
+            name, tot, calls = cols[0], cols[1], cols[3]
+        else:
             continue
-        m = pat.match(line.rstrip())
-        if m:
-            out[m.group(1).strip()] = float(m.group(2))
+        try:
+            out[name] = (float(tot), float(cols[1]), int(calls))
+        except ValueError:
+            continue                  # 表头 / 分隔线 / "总墙钟 ..." 行
     return out
 
 
@@ -177,19 +187,26 @@ def fig1_speedup():
     if not pb or not pn:
         pb = pb or {}
         pn = pn or {}
-    keys = sorted(set(pb) | set(pn), key=lambda k: -max(pb.get(k, 0), pn.get(k, 0)))
-    keys = [k for k in keys if max(pb.get(k, 0), pn.get(k, 0)) > 0.02][:7][::-1]
-    short = {k: k.replace("(from ops)", "").replace("(from enc)", "")
-                .replace("moead.", "moead.").replace("rvns.", "rvns.") for k in keys}
+    tot = lambda d, k: (d[k][0] if k in d else 0.0)          # noqa: E731
+    keys = sorted(set(pb) | set(pn), key=lambda k: -max(tot(pb, k), tot(pn, k)))
+    keys = [k for k in keys if max(tot(pb, k), tot(pn, k)) > 0.02][:7][::-1]
+    short = {k: k.replace("(from ops)", "").replace("(from enc)", "") for k in keys}
     y = np.arange(len(keys))
     h = 0.36
-    ax.barh(y + h / 2, [pb.get(k, 0) for k in keys], h, label="优化前",
+    ax.barh(y + h / 2, [tot(pb, k) for k in keys], h, label="优化前",
             color=C_BASE, edgecolor="white")
-    ax.barh(y - h / 2, [pn.get(k, 0) for k in keys], h, label="优化后",
+    ax.barh(y - h / 2, [tot(pn, k) for k in keys], h, label="优化后",
             color=C_NEW, edgecolor="white")
+    # 在每根"优化后"的柱子上标调用数变化（这一列是判据：次数掉了 = 消掉冗余计算）
+    for i, k in enumerate(keys):
+        cb = pb[k][2] if k in pb else 0
+        cn = pn[k][2] if k in pn else 0
+        if cb != cn:
+            ax.text(tot(pn, k) + 0.012, i - h / 2, "%d→%d 次" % (cb, cn),
+                    va="center", fontsize=7, color="#B71C1C")
     ax.set_yticks(y)
     ax.set_yticklabels([short[k] for k in keys], fontsize=8)
-    ax.set_xlabel("自身+子调用累计耗时 (s, G=60)")
+    ax.set_xlabel("含子调用的累计耗时 (s, G=60)")
     ax.set_title("(b) 各函数耗时变化  (真实计时，非 cProfile)")
     ax.legend(framealpha=0.9, loc="lower right")
     ph.style_ax(ax)
