@@ -76,10 +76,14 @@ RMOEA_D/
 │   ├── ablation_ladder_analysis.py      # ★ 阶梯分析 (逐级 HV+Friedman / 相邻级配对 / 2×2 / T 分布)
 │   ├── ladder_run_all.py                # ★ 阶梯分批驱动 (按实例切批, 超时重试)
 │   ├── ladder_plot.py                   # ★ 阶梯 4 面板图 (与文档表格逐位同口径)
-│   └── paper_cmp_plot.py                # ★ 论文对照图 (按种子交集配对)
+│   ├── paper_cmp_plot.py                # ★ 论文对照图 (按种子交集配对)
+│   ├── phase_oracle.py                  # ★ G1/G2 诊断: 相位 oracle + 状态可观测性 (T 维度是否还有可实现空间)
+│   ├── aba_holdout.py                   # ★ ABA 留出集确认 (逐实例 H1 + 合并敏感性 + 方向一致性)
+│   ├── eqc_compare.py                   # ★ 等算力对照 (时间比+显著性 -> 杠杆是不是纯算力效应)
+│   └── hv_box.py                        # ★ 归一化盒口径冻结 (盒指纹/臂集落盘, 判定绝对 HV 能否跨批比较)
 │
 ├── tests/                               # 单元测试
-│   └── test_refactor.py                 # 重构验证 + 消融/阶梯诊断修复的回归锁 (80 cases)
+│   └── test_refactor.py                 # 重构验证 + 消融/阶梯/ABA/盒指纹/等算力判定的回归锁 (113 cases)
 │
 ├── data/                                # Brandimarte 原始实例 (Mk01~Mk10.fjs)
 ├── test_cases/                          # 固定测试用例 (seed=42)
@@ -126,6 +130,8 @@ RMOEA_D/
     ├── ablation-qpas-rvns-diagnosis.md  # ★ 消融诊断：4 个 bug + T 杠杆 + 六级阶梯复现 (§9)
     ├── paper-vs-reproduction.md         # ★ 与论文 (Li et al. 2022) 的逐条对照
     ├── qpas-implementation-audit.md     # ★ Q-PAS 实现审计 (逐条核对 + 6 处论文笔误)
+    ├── qpas-optimization-plan.md        # ★ Q-PAS/算法优化方案 + §10 执行记录 (Gating/ABA 均判负)
+    ├── aba-budget-allocation.md         # ★ ABA 方法定义 + §6 实验结果 (等算力下的预算分配: 负结果)
     ├── rmoead-paper.md                  # 论文原文 (Markdown 抽取)
     ├── rmoead-paper-cn.md               # 论文中文翻译
     └── superpowers/                     # 设计规格 (specs/) 与实现计划 (plans/)

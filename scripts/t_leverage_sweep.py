@@ -110,14 +110,81 @@ ARM_DEF = {
     "QPAS2_hv_wide_cvnorm": ("qpas", dict(ql_reward_mode="hv", ql_tie_break="random",
                                          ql_actions=[5, 10, 20, 50],
                                          ql_cv_normalize=True)),
+    # ── ABA：等预算下的邻域搜索预算分配 ──
+    # 背景：把全局 ls_trials 由 1 提到 3 是全场最大的单一新杠杆（+4.68%），
+    # 但算力同时涨到 2.22×——那是"更狠"，不是"更聪明"。
+    # 这四臂把总算力构造性固定在「每代每解均值 = 2」，只改变"预算发给谁"：
+    #   RVNSonly_t2     等算力基准：所有解统一上限 2
+    #   RVNSonly_Brand  异质性对照：随机决定升级哪些解（必须能排除
+    #                   "预算随机波动本身就有用"这一解释，否则归因不成立）
+    #   RVNSonly_Bstate 状态驱动：优先升级上一代未被改进的解
+    #   RVNSonly_Blearn 学习驱动：升级偏好由 SM/FM 式信用统计学到
+    "RVNSonly_t2":     ("rvns", dict(fixed_T=10, rvns_ls_trials=2)),
+    "RVNSonly_Brand":  ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                     rvns_budget_mode="pool_random",
+                                     rvns_budget_pool=[1, 3],
+                                     rvns_budget_target_mean=2.0)),
+    "RVNSonly_Bstate": ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                     rvns_budget_mode="pool_state",
+                                     rvns_budget_pool=[1, 3],
+                                     rvns_budget_target_mean=2.0)),
+    "RVNSonly_Blearn": ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                     rvns_budget_mode="pool_learn",
+                                     rvns_budget_pool=[1, 3],
+                                     rvns_budget_target_mean=2.0)),
+    # 反极性臂（**探索性 / post-hoc**）：Mk10 首轮实测显示"升级卡住的解"
+    # 几乎买不到回报（回报率 0.069），而"升级刚被改进过的解"高得多（0.486）。
+    # 注意该统计带策略依赖，不能直接反推方向，所以补一个臂直接检验。
+    # 在留出集（Mk07/Mk09）确认之前，这一臂不得作为结论。
+    "RVNSonly_Bhot":   ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                     rvns_budget_mode="pool_improved",
+                                     rvns_budget_pool=[1, 3],
+                                     rvns_budget_target_mean=2.0)),
+    # ── 等算力基线（P3/B1）：把"多花算力"与"更聪明"分开 ──
+    # `RVNSonly_t3`（ls_trials=3）比 `RVNSonly`（ls_trials=1）快 2.22 倍算力，
+    # 却拿到了全场最大的单一增益（+4.68%***）。审稿人第一刀就是：
+    # "那只是多跑了算力"。等算力做法 = 把 t=1 的臂跑满 2.22 倍代数（G 200→440）。
+    # 注意：**必须落在独立的 lab 文件里**（--out logs/_mk10_eqc.json），
+    # 否则会把它的前沿并进 ABA 的归一化盒，破坏已冻结的盒指纹。
+    "T10_G440":         ("fixed", dict(fixed_T=10, _max_gen=440)),
+    "RVNSonly_G440":    ("rvns",  dict(fixed_T=10, rvns_ls_trials=1, _max_gen=440)),
+    "RandVNS_G440":     ("randvns", dict(fixed_T=10, rvns_mode="random",
+                                         rvns_ls_trials=1, _max_gen=440)),
+    # G440 那一批是**过冲**：RVNSonly_G440 43.2s vs RVNSonly_t3 28.6s = 1.51×，
+    # 不是时间匹配，测不出"ls_trials 是不是纯算力效应"。
+    # 下面两个才是**真正时间匹配**的对照：
+    #   RVNSonly_G290 ≈ 19.7s × 290/200 ≈ 28.6s  -> 对齐 RVNSonly_t3
+    #   T50_G440                                       -> 看 T 维度在长代数下是否还分层
+    "RVNSonly_G290":    ("rvns",  dict(fixed_T=10, rvns_ls_trials=1, _max_gen=290)),
+    "T50_G440":         ("fixed", dict(fixed_T=50, _max_gen=440)),
+    # 更严的公平性口径：按**邻域求值次数**而非墙钟对齐。
+    # 实测每代每解上限 3 时实际约用 2.93 次，故 ls_trials=3 @ G=200 做了
+    # ≈200×100×2.93 = 58600 次邻域求值；ls_trials=1 要跑到 G=586 才有同样次数。
+    # 若 HV(t1@586) 也打平 t3@200，则"尝试次数"这个杠杆按两个口径都站不住。
+    "RVNSonly_G586":    ("rvns",  dict(fixed_T=10, rvns_ls_trials=1, _max_gen=586)),
 }
+
+
+def resolve_grid(kwargs, n_pop, max_gen):
+    """抽出逐臂覆盖 (n_pop, max_gen) 的逻辑，返回 (extra, n_pop, max_gen)。
+
+    等算力臂需要跑更多代（如 T10@G=440 对齐 t3 的墙钟）。用 `_max_gen` / `_n_pop`
+    前缀是为了不与 ``RMOEAD`` 的显式位置参数撞名（撞名会 TypeError）。
+    返回的 ``extra`` 里**必须**已经没有这两个键——否则会当成未知 kwargs 传下去。
+    """
+    extra = dict(kwargs)
+    if "_max_gen" in extra:
+        max_gen = int(extra.pop("_max_gen"))
+    if "_n_pop" in extra:
+        n_pop = int(extra.pop("_n_pop"))
+    return extra, n_pop, max_gen
 
 
 def _run_one(job):
     instance, n_pop, max_gen, data_dir, label, kind, kwargs, seed = job
     from rmoea_d.algorithm import RMOEAD
 
-    extra = dict(kwargs)
+    extra, n_pop, max_gen = resolve_grid(kwargs, n_pop, max_gen)
     if kind in ("full", "rvns", "randvns"):
         # 含局部搜索的臂：Q-PAS 有无由 kwargs 决定
         extra["enable_rvns"] = True
@@ -140,6 +207,8 @@ def _run_one(job):
         final_hv=float(res["final_hv"]), total_time=float(dt), hist_T=hist_T,
         q_table=solver.ql.q_table.tolist() if solver.ql else None,
         actions=list(solver.ql.actions) if solver.ql else None,
+        # ABA：预算分配统计（mean_planned_trials 用于核对"算力是否真相等"）
+        rvns_budget=(solver.rvns.get_budget_stats() if solver.rvns else None),
         final_pf=[[float(p["Makespan"]), float(p["Workload"])] for p in res["final_pf"]],
     )
 
@@ -208,7 +277,10 @@ def main():
                       f"last={r['label']}/s{r['seed']} hv={r['final_hv']:.5f}", flush=True)
 
     all_done = {(r["label"], r["seed"]) for r in rows}
-    target = {(a, s) for a in ARM_DEF for s in seeds}
+    # 目标集 = **本文件已有的臂 ∪ 本次请求的臂**，不是整个 ARM_DEF。
+    # 否则用 --out 跑到独立 lab（如等算力臂）时永远判不出"完成"。
+    want = {r["label"] for r in rows} | set(labels)
+    target = {(a, s) for a in want for s in seeds}
     if all_done >= target:
         _dump(rows, out)
         if os.path.exists(partial):

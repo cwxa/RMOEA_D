@@ -414,6 +414,182 @@ class TestRVNSRandomMode(unittest.TestCase):
         self.assertEqual(seen, {0, 1, 2, 3, 4})
 
 
+class TestABABudgetAllocation(unittest.TestCase):
+    """ABA 回归锁：等算力必须是**构造性**保证，不能被后续改动悄悄破坏。
+
+    这组测试的核心是「四档策略的每代总预算严格相等」。这条一旦断了，
+    `RVNSonly_Bstate vs RVNSonly_t2` 比出来的就不再是"预算发给谁"，
+    而是"预算发多少"——整轮实验的归因随之失效。
+    """
+
+    N_POP = 10  # 偶数，使 n_pop*(target-base) 能被 (top-base) 整除
+
+    def _rvns(self, mode, pool=(1, 3), target=2.0, ls_trials=1):
+        return RVNS(n_operators=5, lp=40, ls_trials=ls_trials, mode="rl",
+                    budget_mode=mode, budget_pool=list(pool),
+                    budget_target_mean=target)
+
+    def test_fixed_ignores_pool_and_uses_global_ls_trials(self):
+        r = self._rvns("fixed", ls_trials=2)
+        plan = r.plan_generation(self.N_POP, np.random.RandomState(0))
+        self.assertTrue((plan == 2).all(), plan)
+
+    def test_single_level_pool_degrades_to_fixed(self):
+        """只有一个档位时不许假装自适应。"""
+        r = self._rvns("pool_state", pool=(3,), target=3.0, ls_trials=3)
+        self.assertEqual(r.budget_mode, "fixed")
+
+    def test_equal_total_budget_across_modes(self):
+        """四档策略的计划总预算必须逐代相等——本轮实验的地基。"""
+        rng = np.random.RandomState(20260917)
+        for mode in ("fixed", "pool_random", "pool_state", "pool_learn"):
+            r = self._rvns(mode, ls_trials=2)
+            total = 0
+            for _ in range(5):
+                plan = r.plan_generation(self.N_POP, rng)
+                total += int(plan.sum())
+                self.assertGreaterEqual(int(plan.min()), 1)
+                self.assertLessEqual(int(plan.max()), 3)
+            self.assertEqual(total, 5 * self.N_POP * 2, mode)
+
+    def test_upgrade_quota_is_half(self):
+        rng = np.random.RandomState(1)
+        for mode in ("pool_random", "pool_state", "pool_learn"):
+            plan = self._rvns(mode).plan_generation(self.N_POP, rng)
+            self.assertEqual(int((plan == 3).sum()), self.N_POP // 2, mode)
+
+    def test_state_upgrades_stuck_solutions(self):
+        """上一代被改进过的解不应再抢升级名额。"""
+        r = self._rvns("pool_state")
+        n = self.N_POP
+        r._last_success = [False] * (n // 2) + [True] * (n // 2)
+        plan = r.plan_generation(n, np.random.RandomState(3))
+        stuck = np.array([1] * (n // 2) + [0] * (n // 2))
+        self.assertEqual(int((plan == 3).sum()), n // 2)
+        self.assertEqual(int((plan[stuck == 1] == 3).sum()), n // 2,
+                         "升级名额没有全部发给卡住的解")
+
+    def test_learn_propensity_moves_to_rewarding_state(self):
+        r = self._rvns("pool_learn")
+        self.assertAlmostEqual(r.budget_propensities()[1], 0.5)  # Laplace 先验
+        for _ in range(20):
+            r._record_budget_outcome(True, True)     # stuck 时升级有回报
+            r._record_budget_outcome(False, False)   # 不卡时升级没回报
+        p = r.budget_propensities()
+        self.assertGreater(p[1], p[0])
+
+    def test_stats_expose_both_budget_and_real_evals(self):
+        """两个口径都要在：一个是发放预算，一个是真实邻域求值次数。"""
+        r = self._rvns("pool_state")
+        r.plan_generation(self.N_POP, np.random.RandomState(0))
+        st = r.get_budget_stats()
+        self.assertEqual(st["planned_budget"], self.N_POP * 2)
+        self.assertAlmostEqual(st["mean_planned_trials"], 2.0)
+        self.assertIn("mean_actual_evals", st)
+        self.assertIn("propensities", st)
+
+    def test_switches_default_to_paper_behaviour(self):
+        sig = inspect.signature(RMOEAD.__init__)
+        self.assertEqual(sig.parameters["rvns_budget_mode"].default, "fixed")
+        s = RMOEAD("Mk01", n_pop=8, max_gen=2, seed=0,
+                   rvns_budget_mode="pool_state",
+                   rvns_budget_pool=[1, 3], rvns_budget_target_mean=2.0)
+        self.assertEqual(s.rvns.budget_mode, "pool_state")
+        self.assertEqual(s.rvns.budget_target_mean, 2.0)
+
+    def test_run_records_equal_compute_proof(self):
+        """端到端：真实求解必须落盘预算统计，使"等算力"可被外部核对。"""
+        s = RMOEAD("Mk01", n_pop=8, max_gen=3, seed=5,
+                   enable_rvns=True, rvns_ls_trials=1,
+                   rvns_budget_mode="pool_learn",
+                   rvns_budget_pool=[1, 3], rvns_budget_target_mean=2.0)
+        res = s.solve()
+        b = res["rvns_budget"]
+        self.assertIsNotNone(b)
+        self.assertAlmostEqual(b["mean_planned_trials"], 2.0)
+        self.assertEqual(b["planned_budget"], 8 * 2 * 3)
+        self.assertGreater(b["actual_evals"], 0)
+        self.assertEqual(res["components"]["rvns_budget_mode"], "pool_learn")
+
+
+class TestCVDDModuleLevelRefactor(unittest.TestCase):
+    """compute_cv_dv 提成模块级函数后，方法必须与之逐位等价。
+
+    提出来是为了让**固定 T 的臂**也能逐代记录 CV/DV——G2「状态可观测性」
+    完全依赖这条轨迹，而固定 T 的臂根本没有 Q-learning 对象。
+    """
+
+    PF = [(1.0, 2.0), (2.0, 1.0), (1.5, 1.5), (3.0, 0.5)]
+
+    def test_method_delegates_to_module_function(self):
+        from rmoea_d.core.qlearning import compute_cv_dv
+        ql = QLearningPAS()
+        self.assertEqual(ql.compute_cv_dv(self.PF), compute_cv_dv(self.PF))
+        self.assertEqual(ql.compute_cv_dv(self.PF, normalize=True),
+                         compute_cv_dv(self.PF, normalize=True))
+
+    def test_algorithm_records_cv_dv_even_without_qpas(self):
+        s = RMOEAD("Mk01", n_pop=8, max_gen=3, seed=3, fixed_T=10,
+                   enable_rvns=False)
+        res = s.solve()
+        self.assertIsNone(res["q_table"], "固定 T 的臂不应有 Q-learning 对象")
+        self.assertGreater(len(res["history"]), 0)
+        self.assertTrue(all("cv" in h and "dv" in h for h in res["history"]))
+        self.assertTrue(all(np.isfinite(h["cv"]) for h in res["history"]))
+
+
+class TestHVBoxFingerprint(unittest.TestCase):
+    """盒指纹：同一臂集同一批数据 → 同一指纹；数据变了 → 指纹必须变。
+
+    绝对 HV 只在同一盒内可比，而盒随臂集漂移（同一个臂在项目里留下过三个
+    不同的公开数值）。指纹就是"这两个绝对 HV 能不能比"的机器判据。
+    """
+
+    @staticmethod
+    def _m():
+        import importlib.util
+        path = os.path.join(os.path.dirname(__file__), "..", "scripts", "hv_box.py")
+        spec = importlib.util.spec_from_file_location("hv_box_under_test", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_fingerprint_is_deterministic(self):
+        m = self._m()
+        f = [np.array([[1.0, 2.0], [3.0, 4.0]]), np.array([[2.0, 3.0]])]
+        self.assertEqual(m.fronts_fingerprint(f), m.fronts_fingerprint(f))
+
+    def test_fingerprint_changes_with_data(self):
+        m = self._m()
+        self.assertNotEqual(m.fronts_fingerprint([np.array([[1.0, 2.0]])]),
+                            m.fronts_fingerprint([np.array([[1.0, 2.5]])]))
+
+    def test_assert_same_box_rejects_drift(self):
+        m = self._m()
+        b1 = m.make_box([np.array([[1.0, 2.0]])], arms=["A"])
+        b2 = m.make_box([np.array([[1.0, 9.0]])], arms=["A"])
+        self.assertNotEqual(b1["fronts_sha1"], b2["fronts_sha1"])
+        with self.assertRaises(ValueError):
+            m.assert_same_box(b1, b2)
+
+    def test_box_records_arm_set(self):
+        """盒必须带臂集——否则事后无法判断某绝对 HV 是哪个臂集算出来的。"""
+        m = self._m()
+        b = m.make_box([np.array([[1.0, 2.0]])], arms=["T50", "T10"])
+        self.assertEqual(b["arms"], ["T10", "T50"])
+        self.assertIn(b["fronts_sha1"], m.format_box(b))
+
+    def test_sidecar_roundtrip(self):
+        import tempfile
+        m = self._m()
+        b = m.make_box([np.array([[1.0, 2.0]])], arms=["A"])
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "lab.json")
+            m.write_box_sidecar(src, b)
+            self.assertEqual(m.read_box_sidecar(src)["fronts_sha1"],
+                             b["fronts_sha1"])
+
+
 class TestLadderSwitches(unittest.TestCase):
     """论文 6 级消融阶梯（Li et al. 2022, §5.4）所需的两个组件开关。
 
@@ -991,6 +1167,159 @@ class TestPaperCmpPlot(unittest.TestCase):
               "b": {42: 0.1}}
         v, e, p = self.mod.paired_stats(hv, "a", "b")
         self.assertTrue(v != v and e != e and p != p, "应为 nan")
+
+
+class TestSweepPerArmGridOverride(unittest.TestCase):
+    """逐臂覆盖 (n_pop, max_gen)：等算力臂靠它把 G 从 200 提到 440。
+
+    这类"看起来能用但实际没生效"的开关最贵——`_max_gen` 若没被 pop 掉，
+    RMOEAD 会因为重复关键字参数直接 TypeError（好一点）；但若被 pop 掉后
+    **没被用上**，臂就会静默地跑成普通 G=200，"等算力"结论全废。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = os.path.join(os.path.dirname(__file__), "..", "scripts",
+                            "t_leverage_sweep.py")
+        if not os.path.exists(path):
+            raise unittest.SkipTest("t_leverage_sweep.py 不存在")
+        spec = importlib.util.spec_from_file_location("_tl_sweep", path)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_default_passthrough_when_no_override(self):
+        extra, n_pop, mg = self.mod.resolve_grid(dict(fixed_T=10), 100, 200)
+        self.assertEqual((n_pop, mg), (100, 200))
+        self.assertEqual(extra, dict(fixed_T=10))
+
+    def test_override_is_consumed_and_applied(self):
+        extra, n_pop, mg = self.mod.resolve_grid(
+            dict(fixed_T=10, _max_gen=440, _n_pop=50), 100, 200)
+        self.assertEqual((n_pop, mg), (50, 440))
+        # 关键：两个私有键必须已被 pop，否则会当未知 kwargs 传给 RMOEAD
+        self.assertNotIn("_max_gen", extra)
+        self.assertNotIn("_n_pop", extra)
+        self.assertEqual(extra, dict(fixed_T=10))
+
+    def test_partial_override(self):
+        _, n_pop, mg = self.mod.resolve_grid(dict(_max_gen=440), 100, 200)
+        self.assertEqual((n_pop, mg), (100, 440))
+
+    def test_equal_compute_arms_declare_override(self):
+        """等算力臂必须在 ARM_DEF 里写死 _max_gen，否则它不是等算力的。"""
+        for lbl in ("T10_G440", "RVNSonly_G440", "RandVNS_G440"):
+            self.assertIn(lbl, self.mod.ARM_DEF)
+            kwargs = self.mod.ARM_DEF[lbl][1]
+            self.assertIn("_max_gen", kwargs, lbl)
+            self.assertGreaterEqual(kwargs["_max_gen"], 400, lbl)
+
+
+class TestABAHoldoutPaired(unittest.TestCase):
+    """留出集确认脚本的配对统计：按 seed 交集、dz 符号、相对差口径。
+
+    这里的口径直接决定 H1 的结论，写错了会读出不存在的效应。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = os.path.join(os.path.dirname(__file__), "..", "scripts",
+                            "aba_holdout.py")
+        if not os.path.exists(path):
+            raise unittest.SkipTest("aba_holdout.py 不存在")
+        spec = importlib.util.spec_from_file_location("_aba_ho", path)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    HV = {"a": {42: 0.10, 43: 0.12, 44: 0.14, 45: 0.16},
+          "b": {43: 0.10, 44: 0.11, 45: 0.12, 46: 0.99}}
+
+    def test_uses_seed_intersection_only(self):
+        r = self.mod.paired(self.HV, "a", "b", [42, 43, 44, 45])
+        self.assertEqual(r["seeds"], [43, 44, 45])
+        self.assertEqual(r["n"], 3)
+        self.assertEqual(r["wins"], 3)
+        # d = [.02,.03,.04] -> mean .03；相对差按 **baseline(b)** 均值 .11 缩放
+        self.assertAlmostEqual(r["d"], 0.03, places=9)
+        self.assertAlmostEqual(r["base_mean"], 0.11, places=9)
+        self.assertAlmostEqual(r["rel"], 100.0 * 0.03 / 0.11, places=9)
+        self.assertGreater(r["dz"], 0.0)
+
+    def test_no_shared_seeds_returns_none(self):
+        self.assertIsNone(self.mod.paired(self.HV, "a", "b", [42]))
+
+    def test_identical_arms_give_nan_p_not_a_crash(self):
+        """全零差时 Wilcoxon 会 RuntimeWarning 并返回 nan——不能崩。"""
+        r = self.mod.paired(self.HV, "a", "a", [42, 43, 44, 45])
+        self.assertTrue(r["p"] != r["p"], "应为 nan")
+        self.assertEqual(r["d"], 0.0)
+
+    def test_pooling_unit_is_paired_observation_not_instance_mean(self):
+        """合并口径必须是 (instance, seed) 配对观测。若误压成实例均值，
+        n 会退化成"实例数"（2），任何检验都无意义——这正是本轮修掉的缺陷。
+        这里用源码断言把它锁住。"""
+        src = open(os.path.join(os.path.dirname(__file__), "..", "scripts",
+                                "aba_holdout.py"), encoding="utf-8").read()
+        self.assertIn('pooled[(a, other)].append(', src)
+        self.assertIn('(inst, s, float(dv) / r["base_mean"] * 100.0)', src)
+        self.assertNotIn('pooled[(a, other)].append((inst, r["rel"]))', src)
+
+
+class TestEqualComputeVerdict(unittest.TestCase):
+    """等算力判定：时间比 + 显著性 -> 结论。
+
+    这组判定是"最大杠杆是不是只是算力"的唯一判据，写错方向会得到相反结论。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = os.path.join(os.path.dirname(__file__), "..", "scripts",
+                            "eqc_compare.py")
+        if not os.path.exists(path):
+            raise unittest.SkipTest("eqc_compare.py 不存在")
+        spec = importlib.util.spec_from_file_location("_eqc", path)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_time_matched_and_better_is_not_a_compute_effect(self):
+        self.assertEqual(self.mod._verdict(1.0, True, False)[0], "非算力效应")
+
+    def test_time_matched_and_tied_is_a_compute_effect(self):
+        self.assertEqual(self.mod._verdict(1.0, False, False)[0], "算力效应")
+
+    def test_more_compute_and_better_is_inconclusive_not_evidence(self):
+        """A 多花 2x 算力还更好——不能据此宣称'不是算力效应'。"""
+        self.assertEqual(self.mod._verdict(2.0, True, False)[0], "不可判")
+
+    def test_less_compute_and_better_is_strong_evidence(self):
+        self.assertEqual(self.mod._verdict(0.5, True, False)[0], "强证据-非算力")
+
+    def test_match_band_endpoints_are_inclusive(self):
+        lo, hi = self.mod.MATCH_LO, self.mod.MATCH_HI
+        self.assertEqual(self.mod._verdict(lo, False, False)[0], "算力效应")
+        self.assertEqual(self.mod._verdict(hi, False, False)[0], "算力效应")
+
+    def test_rounding_does_not_flip_the_band(self):
+        """1.51x / 2.19x 这类过冲必须落到'不可判/强证据'，不能落进匹配带。"""
+        self.assertNotEqual(self.mod._verdict(1.51, True, False)[0], "非算力效应")
+        self.assertNotEqual(self.mod._verdict(2.19, True, False)[0], "非算力效应")
+
+    def test_evals_matched_ignores_wallclock_ratio(self):
+        """求值次数口径下，墙钟比 2x 不是混淆而是结果，不能判成'不可判'。"""
+        self.assertEqual(self.mod._verdict(2.0, False, False, "evals")[0], "次数无效")
+        self.assertEqual(self.mod._verdict(2.0, True, False, "evals")[0], "次数有效")
+
+    def test_none_match_is_reference_only(self):
+        """算力不匹配的对照绝不能用来判定。"""
+        self.assertEqual(self.mod._verdict(1.45, True, False, "none")[0], "仅参照")
+
+    def test_every_pair_declares_a_match_dimension(self):
+        """每个对照必须显式声明匹配维度，防止有人后来把不匹配的对照当结论。"""
+        for p in self.mod.PAIRS:
+            self.assertEqual(len(p), 4, p)
+            self.assertIn(p[2], ("time", "evals", "none"), p)
 
 
 if __name__ == "__main__":

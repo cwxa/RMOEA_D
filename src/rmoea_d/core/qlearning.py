@@ -9,6 +9,62 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def compute_cv_dv(pf, normalize=False, hv_bounds=None):
+    """
+    从 Pareto 前沿计算收敛性 CV 与多样性 DV（论文式 14 / 式 15）。
+
+    独立成模块级函数，使**非 Q-PAS 的运行**也能逐代记录 CV/DV——
+    诊断"状态空间是否可观测到最优 T"需要这条轨迹，而固定 T 的臂
+    根本没有 Q-learning 对象。
+
+    论文式 (14) 的 CV 是「到参考点 P* 的均方距离」，未规定归一化。
+    当两个目标量纲悬殊时 CV 会被大量纲目标独占（实测 Mk10 上 f2 占总负载
+    占 CV² 的 96.5%），因此提供 ``normalize``：True 时先用 ``hv_bounds``
+    （缺省用本代前沿范围）把目标拉回同一尺度。
+    """
+    if pf is None or len(pf) == 0:
+        return 0.0, 0.0
+    pf = np.asarray(pf, dtype=float)
+    if pf.ndim != 2:
+        return 0.0, 0.0
+
+    if normalize:
+        if hv_bounds is not None:
+            lo = np.asarray(hv_bounds[0], dtype=float)
+            hi = np.asarray(hv_bounds[1], dtype=float)
+        else:
+            lo, hi = pf.min(axis=0), pf.max(axis=0)
+        span = np.where((hi - lo) > 1e-12, hi - lo, 1.0)
+        pf = (pf - lo) / span
+
+    # CV: sqrt of mean squared distance to ideal point (0,0)
+    # CV: 到理想点(0,0)的均方距离平方根
+    dists = np.sqrt(np.sum(pf ** 2, axis=1))
+    cv = np.sqrt(np.mean(dists ** 2))
+
+    # DV: spacing metric
+    # DV: 间距指标，衡量前沿点分布均匀性
+    if len(pf) < 2:
+        dv = 0.0
+    else:
+        # Sort by first objective
+        idx = np.argsort(pf[:, 0])
+        sorted_pf = pf[idx]
+        ds = []
+        for i in range(len(sorted_pf) - 1):
+            d = np.linalg.norm(sorted_pf[i] - sorted_pf[i + 1])
+            ds.append(d)
+        if len(ds) == 0:
+            dv = 0.0
+        else:
+            mean_d = np.mean(ds)
+            if mean_d == 0:
+                dv = 0.0
+            else:
+                dv = sum(abs(d - mean_d) for d in ds) / ((len(ds)) * mean_d)
+    return cv, dv
+
+
 class QLearningPAS:
     """Q-learning for automatically selecting neighborhood size T.
     Q-learning自动选择邻域大小T，基于收敛性和多样性指标。
@@ -106,47 +162,8 @@ class QLearningPAS:
         """
         if normalize is None:
             normalize = self.cv_normalize
-        if pf is None or len(pf) == 0:
-            return 0.0, 0.0
-        pf = np.asarray(pf, dtype=float)
-        if pf.ndim != 2:
-            return 0.0, 0.0
-
-        if normalize:
-            if self.hv_bounds is not None:
-                lo = np.asarray(self.hv_bounds[0], dtype=float)
-                hi = np.asarray(self.hv_bounds[1], dtype=float)
-            else:
-                lo, hi = pf.min(axis=0), pf.max(axis=0)
-            span = np.where((hi - lo) > 1e-12, hi - lo, 1.0)
-            pf = (pf - lo) / span
-
-        # CV: sqrt of mean squared distance to ideal point (0,0)
-        # CV: 到理想点(0,0)的均方距离平方根
-        dists = np.sqrt(np.sum(pf ** 2, axis=1))
-        cv = np.sqrt(np.mean(dists ** 2))
-
-        # DV: spacing metric
-        # DV: 间距指标，衡量前沿点分布均匀性
-        if len(pf) < 2:
-            dv = 0.0
-        else:
-            # Sort by first objective
-            idx = np.argsort(pf[:, 0])
-            sorted_pf = pf[idx]
-            ds = []
-            for i in range(len(sorted_pf) - 1):
-                d = np.linalg.norm(sorted_pf[i] - sorted_pf[i + 1])
-                ds.append(d)
-            if len(ds) == 0:
-                dv = 0.0
-            else:
-                mean_d = np.mean(ds)
-                if mean_d == 0:
-                    dv = 0.0
-                else:
-                    dv = sum(abs(d - mean_d) for d in ds) / ((len(ds)) * mean_d)
-        return cv, dv
+        # 计算逻辑在模块级 compute_cv_dv 里，非 Q-PAS 运行也能复用同一条定义
+        return compute_cv_dv(pf, normalize=normalize, hv_bounds=self.hv_bounds)
 
     def get_state(self, delta_cv, delta_dv):
         """Map (ΔCV, ΔDV) to state 0-3.

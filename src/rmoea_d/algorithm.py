@@ -26,7 +26,7 @@ from .core.instance import load_instance
 from .core.operators import init_mix3, init_random
 from .core.encoding import decode, decode_with_schedule, decode_crisp
 from .core.moead import generate_weights, compute_neighbors, moead_generation
-from .core.qlearning import QLearningPAS
+from .core.qlearning import QLearningPAS, compute_cv_dv
 from .core.rvns import RVNS, rvns_generation
 from .utils.metrics import non_dominated_sort, compute_hv, instance_hv_bounds
 from .core.fuzzy import fuzzy_dominates
@@ -60,6 +60,9 @@ class RMOEAD:
         enable_rvns=True,
         rvns_lp=40,
         rvns_ls_trials=1,
+        rvns_budget_mode="fixed",
+        rvns_budget_pool=None,
+        rvns_budget_target_mean=None,
         rvns_mode="rl",
         enable_mix3=True,
         enable_elite=True,
@@ -90,6 +93,15 @@ class RMOEAD:
             rvns_ls_trials: RVNS 每个解每代最多尝试的邻域次数 (论文为 1)
             rvns_mode: "rl" 按 SM/FM 轮盘赌选算子；"random" 五算子等概率随机选
                        （论文 Section 4.6 用法 (1)，即 RMOEA/D3 的随机 VNS）
+            rvns_budget_mode: 邻域尝试次数在种群内的**分配方式**（ABA）。
+                       "fixed"（默认，论文口径）所有解统一用 rvns_ls_trials 次上限；
+                       "pool_random" 每代总预算固定、随机决定升级哪些解（异质性对照）；
+                       "pool_state" 优先升级上一代未被改进的解；
+                       "pool_learn" 升级偏好由 SM/FM 式信用统计学习得到。
+                       pool_* 三档的总预算逐代严格相等（见 core/rvns.py）。
+            rvns_budget_pool: 允许的尝试次数档位，默认 [1, 3]
+            rvns_budget_target_mean: 每代每解平均预算上限；给定时每代总预算
+                       固定为 n_pop * rvns_budget_target_mean
             enable_mix3: True 用 MIX3 初始化（1/3 随机 + 1/3 最短时间 + 1/3 全局负载，
                         论文 RMOEA/D2 的贡献点）；False 退化为纯随机初始化 = RMOEA/D1
             enable_elite: True 启用精英档案（论文 RMOEA/D5 的贡献点）；
@@ -131,8 +143,15 @@ class RMOEAD:
         self.rvns_lp = rvns_lp
         self.rvns_ls_trials = rvns_ls_trials
         self.rvns_mode = rvns_mode
+        # ABA：邻域搜索预算的分配方式（"fixed" 即论文口径，其余见 core/rvns.py）
+        self.rvns_budget_mode = rvns_budget_mode
+        self.rvns_budget_pool = rvns_budget_pool
+        self.rvns_budget_target_mean = rvns_budget_target_mean
         self.rvns = (RVNS(n_operators=5, lp=rvns_lp, ls_trials=rvns_ls_trials,
-                          mode=rvns_mode)
+                          mode=rvns_mode,
+                          budget_mode=rvns_budget_mode,
+                          budget_pool=rvns_budget_pool,
+                          budget_target_mean=rvns_budget_target_mean)
                      if enable_rvns else None)
 
         # Internal state
@@ -314,6 +333,10 @@ class RMOEAD:
             # Step 6: Compute HV
             hv = compute_hv(pf, norm_bounds=self.hv_bounds)
 
+            # 逐代 CV/DV（Q-PAS 的状态量）。固定 T 的臂没有 Q-learning 对象，
+            # 但诊断「状态空间是否可观测到最优 T」需要这条轨迹，故统一记录。
+            _cv, _dv = compute_cv_dv(pf, hv_bounds=self.hv_bounds)
+
             gen_time = time.perf_counter() - gen_start
 
             # Compute per-objective statistics from current PF
@@ -331,6 +354,8 @@ class RMOEAD:
                 "pf_size": len(pf),
                 "archive_size": archive_size,
                 "hv": hv,
+                "cv": _cv,
+                "dv": _dv,
                 "z": z,
                 "best_makespan": best_makespan,
                 "best_workload": best_workload,
@@ -433,12 +458,17 @@ class RMOEAD:
             "ql_reward_mode": self.ql_reward_mode if self.ql else None,
             "ql_cv_normalize": self.ql_cv_normalize if self.ql else None,
             "rvns_final_probs": self.rvns.get_probabilities() if self.rvns else None,
+            # ABA：预算分配统计。mean_planned_trials 是"算力是否真相等"的判据，
+            # mean_actual_evals 是真实邻域求值次数——两个都要落盘，否则等算力只是声称。
+            "rvns_budget": self.rvns.get_budget_stats() if self.rvns else None,
             # ── 组件开关（消融阶梯复现需要，便于从结果反查配置）──
             "components": {
                 "mix3": self.enable_mix3,
                 "qpas": self.fixed_T is None,
                 "rvns": self.enable_rvns,
                 "rvns_mode": self.rvns_mode if self.enable_rvns else None,
+                "rvns_budget_mode": (self.rvns_budget_mode
+                                     if self.enable_rvns else None),
                 "elite": self.enable_elite,
                 "fixed_T": self.fixed_T,
             },
