@@ -19,27 +19,33 @@ logger = logging.getLogger(__name__)
 
 def _build_schedule_info(os_vec, ma_vec, instance):
     """
-    解码并构建完整的调度信息，用于LS3（最大负载机器局部搜索）。
-    使用预计算的 crisp_times 表，O(1) 查找加工时间。
+    解码并构建「机器 → 该机器上的工序」索引，用于 LS3（最大负载机器局部搜索）。
+
+    返回值：
+        by_machine       : list[list[(pos, job_id, oi)]]，每台机器的工序按 pos 升序
+        makespan         : float
+        total_workload   : float
+        machine_workload : list[float]
+
+    优化说明：原实现为**每道工序分配一个 dict**（240 个 dict/次调用，占墙钟 3.3%），
+    但 LS3 实际只用到「机器 → 工序位置」以及该工序的候选机器集。改为纯元组结构后
+    省掉全部 dict 分配。`ops_on_max` 的内容与顺序（按 pos 升序）不变，因此
+    `rng.randint(len(ops_on_max))` 的参数不变 —— 随机流逐位一致。
     """
     n_jobs = instance["n_jobs"]
     n_machines = instance["n_machines"]
-    jobs = instance["jobs"]
     crisp_times = instance["crisp_times"]
 
     op_counter = [0] * n_jobs
     job_ready = [0.0] * n_jobs
     machine_ready = [0.0] * n_machines
     machine_workload = [0.0] * n_machines
-
-    schedule = []
-    op_idx = 0
+    by_machine = [[] for _ in range(n_machines)]
 
     for pos, job_id in enumerate(os_vec):
         oi = op_counter[job_id]
-        op_counter[job_id] += 1
-        chosen_m = ma_vec[op_idx]
-        op_idx += 1
+        op_counter[job_id] = oi + 1
+        chosen_m = ma_vec[pos]
 
         # O(1) 数组索引替代线性扫描
         ptime_crisp = crisp_times[job_id][oi][chosen_m]
@@ -50,22 +56,9 @@ def _build_schedule_info(os_vec, ma_vec, instance):
         job_ready[job_id] = finish
         machine_ready[chosen_m] = finish
         machine_workload[chosen_m] += ptime_crisp
+        by_machine[chosen_m].append((pos, job_id, oi))
 
-        schedule.append({
-            "pos": pos,
-            "job_id": job_id,
-            "oi": oi,
-            "machine": chosen_m,
-            "ptime": ptime_crisp,
-            "start": start,
-            "finish": finish,
-            "alts": jobs[job_id][oi],
-        })
-
-    makespan = max(job_ready)
-    total_workload = sum(machine_workload)
-
-    return schedule, makespan, total_workload, machine_workload
+    return by_machine, max(job_ready), sum(machine_workload), machine_workload
 
 
 def ls1_swap_machine(os_vec, ma_vec, instance, rng):
@@ -84,7 +77,9 @@ def ls1_swap_machine(os_vec, ma_vec, instance, rng):
     current_m = ma_new[idx]
     candidates = [alt[0] for alt in alts if alt[0] != current_m]
     if candidates:
-        ma_new[idx] = int(rng.choice(candidates))
+        # rng.choice(list) 即便 size=None 也走 np.prod 通用路径（8.2us），
+        # 而 randint 只要 2.0us 且消耗同一随机流（diag_rng_equiv.py 逐位验证过）
+        ma_new[idx] = candidates[rng.randint(len(candidates))]
     return os_vec.copy(), ma_new
 
 
@@ -125,8 +120,8 @@ def ls3_max_workload_machine(os_vec, ma_vec, instance, rng):
     if not os_vec:
         return os_vec.copy(), ma_vec.copy()
 
-    # 先解码获取当前调度信息
-    schedule, makespan, total_workload, machine_workload = _build_schedule_info(
+    # 先解码获取「机器 → 工序」索引
+    by_machine, makespan, total_workload, machine_workload = _build_schedule_info(
         os_vec, ma_vec, instance
     )
 
@@ -135,17 +130,15 @@ def ls3_max_workload_machine(os_vec, ma_vec, instance, rng):
     if machine_workload[max_m] <= 0:
         return os_vec.copy(), ma_vec.copy()
 
-    # 收集在max_m上加工的所有工序位置
-    ops_on_max = [s for s in schedule if s["machine"] == max_m]
+    # 收集在max_m上加工的所有工序位置（by_machine 内已按 pos 升序，与旧版
+    # `[s for s in schedule if s["machine"] == max_m]` 的顺序一致）
+    ops_on_max = by_machine[max_m]
     if not ops_on_max:
         return os_vec.copy(), ma_vec.copy()
 
     # 随机选一个工序
-    chosen = ops_on_max[rng.randint(len(ops_on_max))]
-    pos = chosen["pos"]
-    job_id = chosen["job_id"]
-    oi = chosen["oi"]
-    alts = chosen["alts"]
+    pos, job_id, oi = ops_on_max[rng.randint(len(ops_on_max))]
+    alts = instance["jobs"][job_id][oi]
 
     # 换到另一个候选机器（随机选一个不同于当前的）
     current_m = ma_vec[pos]
@@ -154,7 +147,7 @@ def ls3_max_workload_machine(os_vec, ma_vec, instance, rng):
         return os_vec.copy(), ma_vec.copy()
 
     ma_new = ma_vec.copy()
-    ma_new[pos] = int(rng.choice(candidates))
+    ma_new[pos] = candidates[rng.randint(len(candidates))]
     return os_vec.copy(), ma_new
 
 
@@ -208,6 +201,18 @@ LOCAL_SEARCH_OPERATORS = [
     ls4_swap_positions,
     ls5_insert_position,
 ]
+
+# 该算子是否会「打乱 OS 顺序」从而让已有机器值失效？
+#
+#   LS1/LS2/LS3：只把某一个位置的机器换成**该工序候选集 alts 里的**另一台
+#                （见各自实现里的 `candidates = [alt[0] for alt in alts ...]`），
+#                OS 顺序不变 → 每个位置的 (job, oi) 不变 → 输出**必然合法**。
+#   LS4/LS5    ：交换 / 插入会让区间内位置的 (job, oi) 发生迁移 → 需要修复。
+#
+# 据此可以在 LS1~LS3 后跳过 `_repair_ma_for_os`：跳过是**严格等价**的，
+# 因为原实现全查后必然无一处不合法，也就从未消耗过 rng（随机流不变）。
+# 等价性锁：tests/test_refactor.py::TestLSOutputsAreValid
+LS_MAY_INVALIDATE_MA = [False, False, False, True, True]
 
 
 class RVNS:
@@ -337,6 +342,9 @@ class RVNS:
         n_trials = self.ls_trials if trials is None else max(1, int(trials))
         self._last_trials_used = 0
         self._last_upgrade_paid = False
+        # 最近一次成功邻域的 crisp 目标值：调用方（rvns_generation）本来要为此
+        # 再 decode 一次，直接复用可省掉那次重复解码
+        self._last_eval = None
 
         for t_i in range(n_trials):
             op_idx = self.select_operator(rng)
@@ -345,8 +353,12 @@ class RVNS:
             # Generate neighbor
             new_os, new_ma = ls_func(os_vec, ma_vec, instance, rng)
 
-            # 修复MA合法性（OS变化后MA可能不合法，始终调用）
-            new_ma = _repair_ma_for_os(new_os, new_ma, instance, rng)
+            # 修复MA合法性：只有会打乱 OS 顺序的算子（LS4 交换 / LS5 插入）才可能
+            # 让机器与「该位置的工序」失配。LS1~LS3 只把某一位置的机器换成该工序
+            # 候选集里的另一台 → 输出必然合法；跳过修复严格等价，且不改变随机流
+            # （原实现全查后无一处不合法，从未消耗过 rng）。
+            if LS_MAY_INVALIDATE_MA[op_idx]:
+                new_ma = _repair_ma_for_os(new_os, new_ma, instance, rng)
 
             # Evaluate: 旧值复用入参，新值用 decode_crisp（零分配）
             new_mc, new_wc = decode_crisp(new_os, new_ma, instance)
@@ -364,6 +376,7 @@ class RVNS:
                 # 只有第 2 次及以后命中，才算这次"升级"真买到了东西；
                 # 第 1 次就命中说明升级名额被浪费了（首试本来就会成功）
                 self._last_upgrade_paid = bool(t_i > 0)
+                self._last_eval = (new_mc, new_wc)
                 return new_os, new_ma, True
 
         self._last_trials_used = n_trials
@@ -572,8 +585,9 @@ def rvns_generation(population, objectives, weights, instance, z, rng, rvns):
                 bool(stuck_flags[i]), bool(success and rvns._last_upgrade_paid))
 
         if success:
-            # 更新解和目标值（crisp-only）
-            new_mc, new_wc = decode_crisp(new_os, new_ma, instance)
+            # 复用 apply_local_search 内部已经算过的 crisp 目标值 ——
+            # 原来这里会再 decode 一次（每次约 50us，占总墙钟 ~7%）
+            new_mc, new_wc = rvns._last_eval
             new_pop[i] = (new_os, new_ma)
             new_obj[i] = [new_mc, new_wc]
             z[0] = min(z[0], new_mc)

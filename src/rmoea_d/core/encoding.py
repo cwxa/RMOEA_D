@@ -10,6 +10,10 @@ def decode_crisp(os_vec, ma_vec, instance):
     """
     零分配解码：仅返回 crisp makespan 和 workload，用于进化热路径。
     使用展平为 list-of-lists 的 crisp_times 表，O(1) 数组索引，全程零 Python 对象分配。
+
+    微优化：用 `zip` 同时迭代 os/ma（省掉第二个下标计数器 `op_idx_global` 与
+    `ma_vec[i]` 索引），并把 `job_ready`/`machine_ready` 的读写改为「读一次、
+    写一次」。数值路径与归约顺序完全不变。
     """
     n_jobs = instance["n_jobs"]
     n_machines = instance["n_machines"]
@@ -19,18 +23,17 @@ def decode_crisp(os_vec, ma_vec, instance):
     job_ready = [0.0] * n_jobs
     machine_ready = [0.0] * n_machines
     total_workload = 0.0
-    op_idx_global = 0
 
-    for job_id in os_vec:
+    for job_id, chosen_m in zip(os_vec, ma_vec):
         oi = op_counter[job_id]
-        op_counter[job_id] += 1
-        chosen_m = ma_vec[op_idx_global]
-        op_idx_global += 1
+        op_counter[job_id] = oi + 1
 
         # O(1) 数组索引替代 dict.get，消除哈希计算
         ptime = crisp_times[job_id][oi][chosen_m]
 
-        start = job_ready[job_id] if job_ready[job_id] > machine_ready[chosen_m] else machine_ready[chosen_m]
+        jr = job_ready[job_id]
+        mr = machine_ready[chosen_m]
+        start = jr if jr > mr else mr
         finish = start + ptime
         job_ready[job_id] = finish
         machine_ready[chosen_m] = finish

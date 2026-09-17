@@ -162,6 +162,28 @@ ARM_DEF = {
     # ≈200×100×2.93 = 58600 次邻域求值；ls_trials=1 要跑到 G=586 才有同样次数。
     # 若 HV(t1@586) 也打平 t3@200，则"尝试次数"这个杠杆按两个口径都站不住。
     "RVNSonly_G586":    ("rvns",  dict(fixed_T=10, rvns_ls_trials=1, _max_gen=586)),
+
+    # ── 初始化变体扫描（I_ 前缀）──
+    # 动机：消融阶梯里 **MIX3 是最大的单一组件（+14.46%***）**，却**从未做过变体
+    # 扫描**。而且它的三条分支 random / LS / GW **全部把 OS 随机打乱**，只在机器
+    # 选择（MA 维度）做文章 —— 工序顺序这一维在初始化阶段完全没被利用。
+    # 这里其余组件与 `RVNSonly` 完全一致（fixed_T=10 + RVNS + ls_trials=1），
+    # 只换 init_variant，因此任何差异都只能归因于初始化。
+    # `I_mix3` 与 `RVNSonly` 配置完全相同，是内建的一致性检查（须逐位相同）。
+    "I_mix3":     ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                init_variant="mix3")),
+    "I_spt":      ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                init_variant="mix3_spt")),
+    "I_mwr":      ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                init_variant="mix3_mwr")),
+    "I_gw_spt":   ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                init_variant="mix3_gw_spt")),
+    "I_half_r":   ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                init_variant="half_random")),
+    "I_no_r":     ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                init_variant="no_random")),
+    "I_rand":     ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                init_variant="random")),
 }
 
 

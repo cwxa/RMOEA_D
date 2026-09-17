@@ -1322,5 +1322,543 @@ class TestEqualComputeVerdict(unittest.TestCase):
             self.assertIn(p[2], ("time", "evals", "none"), p)
 
 
+class TestRepairFastPath(unittest.TestCase):
+    """`_repair_ma_for_os` 热路径改写的等价性锁。
+
+    改写把 `rng.choice(list(set))` 换成「预缓存候选列表 + `randint` 索引」
+    （`RandomState.choice` 即便 `size=None` 也走 `np.prod(size)` 通用路径，
+    实测 8.2us/次 vs `randint` 2.0us/次）。这里锁死两点：输出逐位相同、
+    **rng 状态逐位相同**。后者是关键 —— 只要随机流变了，Mk10/Mk07/Mk09 的
+    全部历史实验数据就作废，所有已发布结论都要重跑。
+    """
+
+    @staticmethod
+    def _reference_repair(os_vec, ma_vec, instance, rng):
+        """优化前的逐位实现（原样保留作为参考）。"""
+        ma_vec = ma_vec.copy()
+        op_counter = [0] * instance["n_jobs"]
+        valid_machines = instance["valid_machines"]
+        for idx, job_id in enumerate(os_vec):
+            oi = op_counter[job_id]
+            op_counter[job_id] += 1
+            if ma_vec[idx] not in valid_machines[job_id][oi]:
+                ma_vec[idx] = rng.choice(list(valid_machines[job_id][oi]))
+        return ma_vec
+
+    @staticmethod
+    def _random_case(instance, seed):
+        """构造「多数机器不合法」的 (os, ma)，逼出回退分支。"""
+        rng = np.random.RandomState(seed)
+        os_vec = []
+        for j, ops in enumerate(instance["jobs"]):
+            os_vec.extend([j] * len(ops))
+        rng.shuffle(os_vec)
+        ma_vec = [int(x) for x in rng.randint(0, instance["n_machines"],
+                                              size=len(os_vec))]
+        return os_vec, ma_vec
+
+    def test_output_and_rng_stream_match_reference(self):
+        from rmoea_d.core.operators import _repair_ma_for_os
+        for inst_name in ("Mk07", "Mk10"):
+            inst = load_instance(inst_name, "data", 42)
+            for trial in range(15):
+                os_vec, ma_vec = self._random_case(inst, 300 + trial)
+                ra_rng = np.random.RandomState(7 + trial)
+                rb_rng = np.random.RandomState(7 + trial)
+                ra = self._reference_repair(os_vec, ma_vec, inst, ra_rng)
+                rb = _repair_ma_for_os(os_vec, ma_vec, inst, rb_rng)
+                self.assertEqual([int(x) for x in ra], [int(x) for x in rb],
+                                 "repair 输出不一致 (%s trial=%d)"
+                                 % (inst_name, trial))
+                sa, sb = ra_rng.get_state(), rb_rng.get_state()
+                self.assertEqual(sa[2], sb[2],
+                                 "rng 内部位置不一致 (%s trial=%d)"
+                                 % (inst_name, trial))
+                self.assertTrue(np.array_equal(sa[1], sb[1]),
+                                "rng 状态缓冲不一致 (%s trial=%d)"
+                                % (inst_name, trial))
+
+    def test_reference_really_consumes_rng(self):
+        """反向对照：不合法输入必须真的让参考实现消耗 rng。
+
+        若这一条不成立，说明测试用例根本没走到回退分支，
+        上面「rng 流相同」就退化成永真的空断言。
+        """
+        inst = load_instance("Mk10", "data", 42)
+        os_vec, ma_vec = self._random_case(inst, 999)
+        rng = np.random.RandomState(3)
+        before = rng.get_state()[2]
+        for _ in range(30):
+            self._reference_repair(os_vec, ma_vec, inst, rng)
+        self.assertNotEqual(before, rng.get_state()[2])
+
+    def test_fallback_cache_equals_freshly_built_list(self):
+        """预缓存 `_fallback_candidates` 必须与现场 `list(set)` 逐位相同。"""
+        from rmoea_d.core.operators import fallback_candidates
+        inst = load_instance("Mk07", "data", 42)
+        cached = fallback_candidates(inst)
+        for j, job_valid in enumerate(inst["valid_machines"]):
+            for oi, machines in enumerate(job_valid):
+                self.assertEqual(cached[j][oi], list(machines))
+
+
+class TestLSOutputsAreValid(unittest.TestCase):
+    """LS1~LS3 的输出对「未变的 OS」必然合法 —— 据此才能跳过 repair。
+
+    `rvns.apply_local_search` 现在只在 `LS_MAY_INVALIDATE_MA[op_idx]` 为真时
+    才调用 `_repair_ma_for_os`。若 LS1~LS3 真能产出非法机器，跳过就会改变结果。
+    """
+
+    @staticmethod
+    def _valid(os_vec, ma_vec, instance):
+        op_counter = [0] * instance["n_jobs"]
+        vm = instance["valid_machines"]
+        for idx, job_id in enumerate(os_vec):
+            oi = op_counter[job_id]
+            op_counter[job_id] += 1
+            if ma_vec[idx] not in vm[job_id][oi]:
+                return False
+        return True
+
+    @staticmethod
+    def _legal_case(instance, seed):
+        from rmoea_d.core.operators import _repair_ma_for_os
+        rng = np.random.RandomState(seed)
+        os_vec = []
+        for j, ops in enumerate(instance["jobs"]):
+            os_vec.extend([j] * len(ops))
+        rng.shuffle(os_vec)
+        ma_vec = [int(x) for x in rng.randint(0, instance["n_machines"],
+                                              size=len(os_vec))]
+        return os_vec, _repair_ma_for_os(os_vec, ma_vec, instance,
+                                         np.random.RandomState(seed + 1))
+
+    def test_ls1_ls2_ls3_never_produce_illegal_machine(self):
+        from rmoea_d.core.rvns import (ls1_swap_machine, ls2_min_time_machine,
+                                       ls3_max_workload_machine)
+        for inst_name in ("Mk01", "Mk07", "Mk10"):
+            inst = load_instance(inst_name, "data", 42)
+            for fn in (ls1_swap_machine, ls2_min_time_machine,
+                       ls3_max_workload_machine):
+                for trial in range(25):
+                    os_vec, ma_vec = self._legal_case(inst, 500 + trial)
+                    self.assertTrue(self._valid(os_vec, ma_vec, inst),
+                                    "测试输入本身不合法")
+                    new_os, new_ma = fn(os_vec, ma_vec, inst,
+                                        np.random.RandomState(900 + trial))
+                    self.assertTrue(
+                        self._valid(new_os, new_ma, inst),
+                        "%s 在 %s 上产出了非法机器 (trial=%d)"
+                        % (fn.__name__, inst_name, trial))
+
+    def test_flag_marks_exactly_the_order_breaking_operators(self):
+        """LS4 交换 / LS5 插入会迁移 (job, oi) → 必须保留 repair。"""
+        from rmoea_d.core.rvns import LS_MAY_INVALIDATE_MA
+        self.assertEqual(LS_MAY_INVALIDATE_MA,
+                         [False, False, False, True, True])
+
+
+class TestHotPathEquivalence(unittest.TestCase):
+    """其余三处热路径改写的等价性锁。"""
+
+    def test_decode_crisp_matches_reference(self):
+        """zip 版 decode_crisp 与原「下标计数器」版数值逐位相同。"""
+        from rmoea_d.core.encoding import decode_crisp
+        from rmoea_d.core.operators import _repair_ma_for_os
+
+        def reference(os_vec, ma_vec, instance):
+            n_jobs = instance["n_jobs"]
+            n_machines = instance["n_machines"]
+            crisp_times = instance["crisp_times"]
+            op_counter = [0] * n_jobs
+            job_ready = [0.0] * n_jobs
+            machine_ready = [0.0] * n_machines
+            total_workload = 0.0
+            op_idx_global = 0
+            for job_id in os_vec:
+                oi = op_counter[job_id]
+                op_counter[job_id] += 1
+                chosen_m = ma_vec[op_idx_global]
+                op_idx_global += 1
+                ptime = crisp_times[job_id][oi][chosen_m]
+                start = (job_ready[job_id] if job_ready[job_id] > machine_ready[chosen_m]
+                         else machine_ready[chosen_m])
+                finish = start + ptime
+                job_ready[job_id] = finish
+                machine_ready[chosen_m] = finish
+                total_workload += ptime
+            makespan = job_ready[0]
+            for t in job_ready[1:]:
+                if t > makespan:
+                    makespan = t
+            return makespan, total_workload
+
+        for inst_name in ("Mk01", "Mk10"):
+            inst = load_instance(inst_name, "data", 42)
+            rng = np.random.RandomState(11)
+            for _ in range(20):
+                os_vec = []
+                for j, ops in enumerate(inst["jobs"]):
+                    os_vec.extend([j] * len(ops))
+                rng.shuffle(os_vec)
+                ma_vec = [int(x) for x in
+                          rng.randint(0, inst["n_machines"], size=len(os_vec))]
+                ma_vec = _repair_ma_for_os(os_vec, ma_vec, inst, rng)
+                self.assertEqual(reference(os_vec, ma_vec, inst),
+                                 decode_crisp(os_vec, ma_vec, inst))
+
+    def test_moead_generation_matches_reference(self):
+        """内联 Tchebycheff / 权重转 Python list 之后，整代 MOEA/D 更新逐位相同。"""
+        import copy
+        from rmoea_d.core.encoding import decode_crisp
+        from rmoea_d.core.moead import (compute_neighbors, generate_weights,
+                                        moead_generation, tchebycheff)
+        from rmoea_d.core.operators import (init_mix3, mutate_ma, mutate_os,
+                                            pox_crossover, repair_os,
+                                            ux_crossover, _repair_ma_for_os)
+
+        def reference(population, objectives, weights, B, instance, z,
+                      crossover_rate, rng):
+            n_pop = len(population)
+            new_pop = [p for p in population]
+            new_obj = [list(o) for o in objectives]
+            z = list(z)
+            for i in range(n_pop):
+                neighbors = B[i]
+                if len(neighbors) < 2:
+                    continue
+                p1_idx, p2_idx = rng.choice(neighbors, 2, replace=False)
+                os1, ma1 = new_pop[p1_idx]
+                os2, ma2 = new_pop[p2_idx]
+                if rng.rand() < crossover_rate:
+                    child_os, _ = pox_crossover(os1, os2, rng)
+                    child_ma, _ = ux_crossover(ma1, ma2, rng)
+                    child_ma = _repair_ma_for_os(child_os, child_ma, instance, rng)
+                else:
+                    child_os = os1.copy()
+                    child_ma = ma1.copy()
+                child_os = mutate_os(child_os, rng)
+                child_os = repair_os(child_os, instance)
+                child_ma = _repair_ma_for_os(child_os, child_ma, instance, rng)
+                child_ma = mutate_ma(child_ma, child_os, instance, rng)
+                mc, wc = decode_crisp(child_os, child_ma, instance)
+                f = [mc, wc]
+                z[0] = min(z[0], f[0])
+                z[1] = min(z[1], f[1])
+                for j in neighbors:
+                    w = weights[j]
+                    old_g = tchebycheff(new_obj[j], w, z)
+                    new_g = tchebycheff(f, w, z)
+                    if new_g < old_g:
+                        new_pop[j] = (child_os, child_ma)
+                        new_obj[j] = f
+            return new_pop, [tuple(o) for o in new_obj], tuple(z)
+
+        inst = load_instance("Mk10", "data", 42)
+        weights = generate_weights(30)
+        B = compute_neighbors(weights, 10)
+        pop = init_mix3(inst, 30, np.random.RandomState(21))
+        obj = [decode_crisp(os_v, ma_v, inst) for os_v, ma_v in pop]
+        z0 = (min(o[0] for o in obj), min(o[1] for o in obj))
+
+        ra_rng = np.random.RandomState(77)
+        rb_rng = np.random.RandomState(77)
+        p1, o1, zz1 = moead_generation(copy.deepcopy(pop), list(obj), weights, B,
+                                       inst, z0, 0.9, ra_rng)
+        p2, o2, zz2 = reference(copy.deepcopy(pop), list(obj), weights, B,
+                                inst, z0, 0.9, rb_rng)
+
+        self.assertEqual(o1, o2, "目标值不一致")
+        self.assertEqual(zz1, zz2, "参考点不一致")
+        self.assertEqual([(x[0], x[1]) for x in p1], [(x[0], x[1]) for x in p2],
+                         "种群解不一致")
+        self.assertEqual(ra_rng.get_state()[2], rb_rng.get_state()[2],
+                         "rng 内部位置不一致")
+        self.assertTrue(np.array_equal(ra_rng.get_state()[1], rb_rng.get_state()[1]),
+                        "rng 状态缓冲不一致")
+
+    def test_neighbor_cache_is_per_T_and_deterministic(self):
+        """邻居只依赖 (weights, T)：同 T 必须复用同一份结构。"""
+        from rmoea_d.core.moead import compute_neighbors, generate_weights
+        weights = generate_weights(50)
+        self.assertEqual(compute_neighbors(weights, 20),
+                         compute_neighbors(weights, 20))
+        solver = RMOEAD("Mk01", n_pop=20, max_gen=3, seed=1,
+                        enable_rvns=False, fixed_T=10)
+        solver.solve()
+        self.assertEqual(list(solver._neighbor_cache.keys()), [10])
+
+    def test_optimization_did_not_change_algorithm_semantics(self):
+        """热路径优化不得顺手改掉算法默认口径。"""
+        sig = inspect.signature(RMOEAD.__init__)
+        self.assertIs(sig.parameters["enable_mix3"].default, True)
+        self.assertIs(sig.parameters["enable_rvns"].default, True)
+        self.assertIsNone(sig.parameters["fixed_T"].default)
+
+
+class TestInitVariants(unittest.TestCase):
+    """初始化变体族（`init_variant`）的等价性与合法性锁。
+
+    动机：MIX3 是消融阶梯里最大的单一组件（+14.46%***），却**从未做过变体扫描**；
+    而它三条分支（random / LS / GW）全部只优化 MA 维度，把 OS 随机打乱 ——
+    工序顺序这一维在初始化阶段完全没被利用。
+    """
+
+    @staticmethod
+    def _expect_os(instance):
+        expect = []
+        for j, ops in enumerate(instance["jobs"]):
+            expect.extend([j] * len(ops))
+        return sorted(expect)
+
+    def test_mix3_variant_is_bit_identical_to_paper_init(self):
+        """`init_variant="mix3"` 必须与论文口径 `init_mix3` 逐位相同。
+
+        这是「变体扫描不污染基线」的前提：桶顺序、余数落点、rng 消耗顺序
+        三者任何一处变了，n_pop 不整除时就会漂移。
+        """
+        from rmoea_d.core.operators import init_by_variant, init_mix3
+        for inst_name in ("Mk01", "Mk07", "Mk10"):
+            inst = load_instance(inst_name, "data", 42)
+            for n in (10, 30, 50, 99, 100, 101, 200):
+                self.assertEqual(
+                    init_mix3(inst, n, np.random.RandomState(7)),
+                    init_by_variant(inst, n, np.random.RandomState(7), "mix3"),
+                    "init_variant='mix3' 与 init_mix3 不等价 (%s n_pop=%d)"
+                    % (inst_name, n))
+
+    def test_random_variant_matches_enable_mix3_false_path(self):
+        """`"random"` 变体必须等于论文 D1 的纯随机初始化。"""
+        from rmoea_d.core.operators import init_by_variant, init_random
+        inst = load_instance("Mk07", "data", 42)
+        rng_a = np.random.RandomState(13)
+        rng_b = np.random.RandomState(13)
+        self.assertEqual([init_random(inst, rng_a) for _ in range(12)],
+                         init_by_variant(inst, 12, rng_b, "random"))
+
+    def test_unknown_variant_raises(self):
+        from rmoea_d.core.operators import init_by_variant
+        inst = load_instance("Mk01", "data", 42)
+        with self.assertRaises(ValueError):
+            init_by_variant(inst, 10, np.random.RandomState(1), "nope")
+
+    def test_every_variant_produces_legal_individuals(self):
+        """所有变体产出的 (os, ma) 都必须合法。"""
+        from rmoea_d.core.operators import INIT_VARIANTS, init_by_variant
+        for inst_name in ("Mk01", "Mk10"):
+            inst = load_instance(inst_name, "data", 42)
+            expect = self._expect_os(inst)
+            for variant in sorted(INIT_VARIANTS):
+                pop = init_by_variant(inst, 20, np.random.RandomState(3), variant)
+                self.assertEqual(len(pop), 20, variant)
+                for os_vec, ma_vec in pop:
+                    self.assertEqual(sorted(os_vec), expect,
+                                     "%s: OS 不是合法工序排列" % variant)
+                    op_counter = [0] * inst["n_jobs"]
+                    for idx, job_id in enumerate(os_vec):
+                        oi = op_counter[job_id]
+                        op_counter[job_id] += 1
+                        self.assertIn(ma_vec[idx],
+                                      inst["valid_machines"][job_id][oi],
+                                      "%s: 机器对工序非法" % variant)
+
+    @staticmethod
+    def _prefix_mean_t2(os_vec, instance, frac=0.2):
+        """序列前 frac 段里各工序最小 t2 的均值。"""
+        k = max(1, int(len(os_vec) * frac))
+        op_counter = [0] * instance["n_jobs"]
+        total = 0
+        for job_id in os_vec[:k]:
+            oi = op_counter[job_id]
+            op_counter[job_id] += 1
+            total += instance["min_t2"][job_id][oi]
+        return total / k
+
+    def test_spt_variant_really_puts_short_operations_first(self):
+        """派工式变体必须真的改变了 OS —— 否则它只是 MIX3 的无用复制。"""
+        from rmoea_d.core.operators import init_os_spt, init_random
+        inst = load_instance("Mk10", "data", 42)
+        rng = np.random.RandomState(5)
+        spt = float(np.mean([self._prefix_mean_t2(init_os_spt(inst, rng)[0], inst)
+                             for _ in range(30)]))
+        rnd = float(np.mean([self._prefix_mean_t2(init_random(inst, rng)[0], inst)
+                             for _ in range(30)]))
+        self.assertLess(spt, rnd,
+                        "SPT 变体没有把短工序排到序列前面 (%.3f vs %.3f)"
+                        % (spt, rnd))
+
+    def test_mwr_picks_largest_remaining_job_first(self):
+        """MWR 的第一步必须选「剩余工作量最大」的工件（定义性检查）。
+
+        原打算用「序列前半段已完成工件数」做统计对比，但 Mk10 上两种初始化
+        都是 0（20 工件 × 12 工序，132 个位置里让任一工件完整出现 12 次太苛刻），
+        该指标没有区分度。改用 explore=0 关掉随机探索后的**确定性规则检查**。
+        """
+        from rmoea_d.core.operators import init_os_mwr
+        inst = load_instance("Mk10", "data", 42)
+        expect = int(np.argmax([sum(row) for row in inst["min_t2"]]))
+        for seed in range(20):
+            os_vec, _ = init_os_mwr(inst, np.random.RandomState(seed),
+                                    explore=0.0)
+            self.assertEqual(os_vec[0], expect,
+                             "MWR 首步没选剩余工作量最大的工件 (seed=%d)" % seed)
+
+    def test_spt_picks_shortest_operation_first(self):
+        """SPT 的第一步必须选 t2 最短的那道工序（定义性检查）。"""
+        from rmoea_d.core.operators import init_os_spt
+        inst = load_instance("Mk10", "data", 42)
+        expect = int(np.argmin([row[0] for row in inst["min_t2"]]))
+        for seed in range(20):
+            os_vec, _ = init_os_spt(inst, np.random.RandomState(seed),
+                                    explore=0.0)
+            self.assertEqual(os_vec[0], expect,
+                             "SPT 首步没选最短工序 (seed=%d)" % seed)
+
+    def test_explore_switch_reintroduces_diversity(self):
+        """explore=0 时同一个 run 内的派工个体完全相同 → 必须有 explore 兜底。
+
+        这也是为什么两个派工式变体默认 explore=0.25：否则 1/3 的初始种群
+        会被同一个确定性解占满，多样性直接崩掉。
+        """
+        from rmoea_d.core.operators import init_os_spt
+        inst = load_instance("Mk10", "data", 42)
+        rng = np.random.RandomState(2)
+        det = {tuple(init_os_spt(inst, np.random.RandomState(2),
+                                 explore=0.0)[0]) for _ in range(10)}
+        self.assertEqual(len(det), 1, "explore=0 时本该完全确定")
+        sto = {tuple(init_os_spt(inst, rng, explore=0.25)[0]) for _ in range(10)}
+        self.assertEqual(len(sto), 10, "explore>0 时个体应互不相同")
+
+    def test_algorithm_routes_variant_through_init_by_variant(self):
+        """`init_variant` 参数必须真的被算法接上（不是只存了个字段）。"""
+        inst = load_instance("Mk01", "data", 42)
+
+        def build(**kw):
+            s = RMOEAD("Mk01", n_pop=18, max_gen=1, seed=7, fixed_T=10,
+                       enable_rvns=False, **kw)
+            s.instance = inst          # `_init_population` 直接用 self.instance
+            return s
+
+        pa, _ = build(init_variant="mix3")._init_population()
+        pb, _ = build(init_variant="mix3_spt")._init_population()
+        self.assertNotEqual(pa, pb, "换 init_variant 后初始种群居然没变")
+
+        # enable_mix3=False 时 init_variant 应被忽略，一律走纯随机（论文 D1）
+        from rmoea_d.core.operators import init_random
+        pc, _ = build(enable_mix3=False,
+                      init_variant="mix3_spt")._init_population()
+        rng = np.random.RandomState(7)
+        self.assertEqual(pc, [init_random(inst, rng) for _ in range(18)])
+
+
+class TestInitVariantAnalysisGrouping(unittest.TestCase):
+    """分析台缺陷回归锁：HV 归一化盒必须**逐实例独立**。
+
+    两条在 2026-09-17 留出集分析里实测踩到的缺陷：
+
+    * **缺陷 A（会读出假结果）**：早前 `load_hv` 把所有 lab 摊平成一个
+      `{(label, seed): hv}` 字典。Mk07 与 Mk10 的工序量级差 ~4 倍，
+      合并后同一个盒把 Mk07 的前沿压进左下角 -> HV 冲到 **1.0**
+      （盒体积上限 1.02²=1.0404），而只在 Mk10 出现的臂只剩 **0.16**。
+      输出会显示"Mk07 上所有初始化变体都近乎完美"——纯粹的量纲假象。
+    * **缺陷 B（静默失效）**：实例标签由文件名得到 `_mk07`，而一致性表的
+      查表键写的是 `mk07`（无下划线）-> 方向一致性表**永远为空**，
+      却打印"判定：两实例同号且都不显著"，等于把"没数据"报成"结论"。
+    """
+
+    @staticmethod
+    def _mk_rows(instance, x0, y0, label):
+        """造一组该实例量级的前沿：x 为 makespan，y 为总机器负载。"""
+        return [dict(instance=instance, label=label, seed=s,
+                     final_pf=[[float(x0 + 2 * s), float(y0 + 3 * s)],
+                                [float(x0 + 8 + 2 * s), float(y0 - 6 + 3 * s)]])
+                for s in range(5)]
+
+    def _import(self):
+        import importlib
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__),
+                                        '..', 'scripts'))
+        return importlib.import_module("init_variant_analysis")
+
+    def test_instance_name_is_inferred_from_filename(self):
+        """缺陷 B：`_mk07_init.json` 必须推出 `Mk07`，不是 `_mk07`/`mk07`。"""
+        m = self._import()
+        self.assertEqual(m._infer_instance("logs/_mk07_init.json", []), "Mk07")
+        self.assertEqual(m._infer_instance("logs/_mk10_lab.json", []), "Mk10")
+        self.assertEqual(m._infer_instance("logs/Mk3_x.json", []), "Mk03")
+        self.assertIsNone(m._infer_instance("logs/_init.json", []))
+
+    def test_rows_are_grouped_by_instance_not_collapsed(self):
+        """缺陷 A：同 (label, seed) 跨实例**不得**互相覆盖。"""
+        import json
+        import tempfile
+        m = self._import()
+        rows = (self._mk_rows("Mk07", 150, 650, "I_mix3")
+                + self._mk_rows("Mk10", 300, 1900, "I_mix3"))
+        with tempfile.NamedTemporaryFile("w", suffix="_mk07.json", delete=False,
+                                         encoding="utf-8") as fh:
+            json.dump(rows, fh)
+            path = fh.name
+        try:
+            per, flat = m.load_by_instance([path])
+        finally:
+            os.remove(path)
+        self.assertEqual(list(per.keys()), ["Mk07", "Mk10"],
+                         "两个实例必须被分开，不能摊平成一张表")
+        self.assertEqual(len(flat), 10)
+        # 旧实现会把 10 行压成 5 个 (label, seed) 键 —— 现在按实例各 5 条
+        for k in per:
+            self.assertEqual(len(per[k]), 5)
+
+    def test_merged_box_produces_dimension_artifact(self):
+        """合并盒会让**同一份数据**的 HV 从 0.0038 摆到 1.0402（270 倍）。
+
+        实测（合成数据，Mk07 量级 150/650，Mk10 量级 300/1900，ref=(1.02,1.02)）：
+
+            Mk07 前沿： 合并盒 1.0402   |  本实例盒 0.8737
+            Mk10 前沿： 合并盒 0.0038   |  本实例盒 0.8737
+
+        盒体积上限是 1.02²=1.0404，所以合并盒把 Mk07 抬到**顶格**、
+        把 Mk10 踩到**近乎零**。这就是为什么 `load_by_instance` 必须分组。
+        """
+        m = self._import()
+        from rmoea_d.utils.metrics import compute_hv, estimate_hv_bounds
+
+        r7 = self._mk_rows("Mk07", 150, 650, "I_mix3")
+        r10 = self._mk_rows("Mk10", 300, 1900, "I_mix3")
+
+        def fronts(rows):
+            return [np.asarray(r["final_pf"], float) for r in rows]
+
+        ref = (1.02, 1.02)
+        # 合并盒（错误做法）
+        lo_m, hi_m = estimate_hv_bounds(fronts(r7) + fronts(r10))
+        hv7_merged = compute_hv(fronts(r7)[0], ref_point=ref,
+                                norm_bounds=(lo_m, hi_m))
+        hv10_merged = compute_hv(fronts(r10)[0], ref_point=ref,
+                                 norm_bounds=(lo_m, hi_m))
+        # 逐实例独立盒（正确做法）
+        lo7, hi7 = estimate_hv_bounds(fronts(r7))
+        lo10, hi10 = estimate_hv_bounds(fronts(r10))
+        hv7_own = compute_hv(fronts(r7)[0], ref_point=ref,
+                             norm_bounds=(lo7, hi7))
+        hv10_own = compute_hv(fronts(r10)[0], ref_point=ref,
+                              norm_bounds=(lo10, hi10))
+
+        # 同一构型的两条前沿，在各自盒里得分必须相同（盒是唯一变量）
+        self.assertAlmostEqual(hv7_own, hv10_own, places=6)
+        # 合并后方向相反且幅度离谱 —— 纯量纲假象
+        self.assertGreater(hv7_merged, 1.03,
+                           "合并盒本该把 Mk07 抬到接近盒体积上限 1.0404")
+        self.assertLess(hv10_merged, 0.05,
+                        "合并盒本该把 Mk10 踩到近乎零")
+        self.assertGreater(hv7_merged / max(hv10_merged, 1e-12), 10.0,
+                           "两种口径必须差出量级，才说明分组不是可选项")
+
+        # 独立盒的下界必须落在本实例量级内（证据：盒没被别的实例污染）
+        self.assertAlmostEqual(lo7[0], 150.0, delta=2.0)
+        self.assertAlmostEqual(lo10[1], 1894.0, delta=2.0)
+
+
 if __name__ == "__main__":
     unittest.main()

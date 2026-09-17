@@ -65,6 +65,11 @@ def moead_generation(population, objectives, weights, B, instance, z, crossover_
     new_obj = [list(o) for o in objectives]
     z = list(z)
 
+    # weights 是 numpy 数组，`weights[j][0]` 每次都会产生 np.float64 标量，
+    # 其算术比 Python float 慢数倍；邻居内层循环每代要跑 n_pop*T 次。
+    # 转成 Python list-of-list 后省下的标量开销可观，数值完全一致（同一个 double）。
+    w_list = weights.tolist() if hasattr(weights, "tolist") else weights
+
     update_count = 0
 
     for i in range(n_pop):
@@ -110,10 +115,25 @@ def moead_generation(population, objectives, weights, B, instance, z, crossover_
 
         # Update neighbors
         # 更新邻居解
+        #
+        # 内联 Tchebycheff（原先是 moead.tchebycheff 调用，60 代共 13.2 万次）：
+        #     g = max(w0*|f0-z0|, w1*|f1-z1|)
+        # z 在邻居循环内不变，故「新解」的 |f-z| 提到循环外只算一次。
+        ns0 = abs(f[0] - z[0])
+        ns1 = abs(f[1] - z[1])
+        z0 = z[0]
+        z1 = z[1]
         for j in neighbors:
-            w = weights[j]
-            old_g = tchebycheff(new_obj[j], w, z)
-            new_g = tchebycheff(f, w, z)
+            w = w_list[j]
+            o = new_obj[j]
+            old_g = w[0] * abs(o[0] - z0)
+            t = w[1] * abs(o[1] - z1)
+            if t > old_g:
+                old_g = t
+            new_g = w[0] * ns0
+            t = w[1] * ns1
+            if t > new_g:
+                new_g = t
             if new_g < old_g:
                 new_pop[j] = (child_os, child_ma)
                 new_obj[j] = f

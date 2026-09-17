@@ -23,7 +23,7 @@ import json
 import os
 
 from .core.instance import load_instance
-from .core.operators import init_mix3, init_random
+from .core.operators import init_by_variant, init_mix3, init_random
 from .core.encoding import decode, decode_with_schedule, decode_crisp
 from .core.moead import generate_weights, compute_neighbors, moead_generation
 from .core.qlearning import QLearningPAS, compute_cv_dv
@@ -65,6 +65,7 @@ class RMOEAD:
         rvns_budget_target_mean=None,
         rvns_mode="rl",
         enable_mix3=True,
+        init_variant="mix3",
         enable_elite=True,
         fixed_T=None,
         timeout=None,
@@ -119,6 +120,9 @@ class RMOEAD:
         self.data_dir = data_dir
         self.enable_rvns = enable_rvns
         self.enable_mix3 = enable_mix3
+        # 初始化变体（见 core.operators.INIT_VARIANTS）。
+        # 仅在 enable_mix3=True 时生效；enable_mix3=False 一律走纯随机（论文 D1）。
+        self.init_variant = init_variant
         self.enable_elite = enable_elite
         self.fixed_T = fixed_T
         self.timeout = timeout
@@ -175,14 +179,18 @@ class RMOEAD:
 
         默认用 MIX3 策略（论文 RMOEA/D2 的贡献点）；
         `enable_mix3=False` 时退化为纯随机初始化，即论文 RMOEA/D1。
-        初始化：随机生成 → crisp decode 目标值（热路径零分配）。"""
-        logger.debug("Initializing population with %s strategy...",
-                     "MIX3" if self.enable_mix3 else "random")
+
+        `init_variant` 进一步给出**变体扫描**入口（见 core.operators.INIT_VARIANTS）。
+        动机：MIX3 是消融阶梯里最大的单一组件（+14.46%***），却**从未做过变体扫描**；
+        而且它的三条分支（random / LS / GW）全都把 OS 随机打乱，只在**机器选择**
+        维度做文章 —— 工序顺序这一维在初始化阶段完全没被利用。
+        `init_variant="mix3"` 与论文口径**逐位相同**（见 tests 的等价锁）。
+
+        初始化：按变体生成个体 → crisp decode 目标值（热路径零分配）。"""
+        variant = self.init_variant if self.enable_mix3 else "random"
+        logger.debug("Initializing population with %s strategy...", variant)
         start = time.perf_counter()
-        if self.enable_mix3:
-            pop = init_mix3(self.instance, self.n_pop, self.rng)
-        else:
-            pop = [init_random(self.instance, self.rng) for _ in range(self.n_pop)]
+        pop = init_by_variant(self.instance, self.n_pop, self.rng, variant)
         objectives = []
         for os_vec, ma_vec in pop:
             mc, wc = decode_crisp(os_vec, ma_vec, self.instance)
@@ -254,6 +262,10 @@ class RMOEAD:
         self.weights = generate_weights(self.n_pop)
         logger.debug("Weight vectors generated: %d vectors", len(self.weights))
 
+        # 邻居结构只依赖 (weights, T)。固定 T 的臂每代 T 不变 → 缓存命中，
+        # 省掉每代一次 O(Np²) 的距离矩阵 + argsort（Np=100、G=200 时约 0.4s）。
+        self._neighbor_cache = {}
+
         # 档案开关变化时必须重置，避免复用上一次 solve() 的残留状态
         self.archive = []
 
@@ -318,7 +330,10 @@ class RMOEAD:
                 logger.debug("Generation %d/%d: Q-learning selected T=%d", gen, self.max_gen, T)
 
             # Step 3: Recompute neighbors with new T
-            B = compute_neighbors(self.weights, T)
+            B = self._neighbor_cache.get(T)
+            if B is None:
+                B = compute_neighbors(self.weights, T)
+                self._neighbor_cache[T] = B
 
             # Step 4: MOEA/D generation
             population, objectives, z = moead_generation(

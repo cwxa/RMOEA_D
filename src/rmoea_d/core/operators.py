@@ -105,6 +105,140 @@ def init_mix3(instance, n_pop, rng):
     return population[:n_pop]
 
 
+def init_os_spt(instance, rng, explore=0.25):
+    """派工式初始化：最短加工时间优先（SPT）+ 随机探索。
+
+    **与 MIX3 三条分支的本质区别**
+
+    论文的 MIX3 是 1/3 random + 1/3 LS + 1/3 GW，三条分支**都把 OS 随机打乱**，
+    只在**机器选择（MA 维度）**上做文章：
+
+        init_random : 随机工序序 + 随机机器
+        init_ls     : 随机工序序 + t2 最小机器
+        init_gw     : 随机工序序 + 负载最轻机器
+
+    也就是说，工序顺序这个维度**从未被初始化利用过**。这里改为用派工规则直接
+    生成 OS：每一步从「各工件待排的下一道工序」中挑 t2 最短的一道入列。
+
+    为避免同一 run 内 1/3 的个体完全同质（SPT 是确定性的），以 `explore`
+    概率改选一个随机可用工件；`rng.rand()` 无条件调用一次，使随机流消耗稳定。
+    """
+    n_jobs = instance["n_jobs"]
+    jobs = instance["jobs"]
+    min_t2 = instance["min_t2"]
+
+    op_counter = [0] * n_jobs
+    available = list(range(n_jobs))
+    os = []
+    ma = []
+    for _ in range(instance["total_ops"]):
+        if rng.rand() < explore:
+            j = available[rng.randint(len(available))]
+        else:
+            j = available[0]
+            best_t = min_t2[j][op_counter[j]]
+            for k in available[1:]:
+                t = min_t2[k][op_counter[k]]
+                if t < best_t:
+                    best_t = t
+                    j = k
+        oi = op_counter[j]
+        os.append(j)
+        op_counter[j] = oi + 1
+        if op_counter[j] >= len(jobs[j]):
+            available.remove(j)
+        alts = jobs[j][oi]
+        ma.append(min(alts, key=lambda x: x[2])[0])
+    return os, ma
+
+
+def init_os_mwr(instance, rng, explore=0.25):
+    """派工式初始化：剩余工作量最大优先（Most Work Remaining）+ 随机探索。
+
+    与 `init_os_spt` 互补：每一步选「剩余工序 t2 之和」最大的工件入列，
+    先把长工件清掉，避免它们在序列末尾堆积成 makespan 瓶颈。
+    """
+    n_jobs = instance["n_jobs"]
+    jobs = instance["jobs"]
+    min_t2 = instance["min_t2"]
+
+    op_counter = [0] * n_jobs
+    remaining = [sum(row) for row in min_t2]
+    available = list(range(n_jobs))
+    os = []
+    ma = []
+    for _ in range(instance["total_ops"]):
+        if rng.rand() < explore:
+            j = available[rng.randint(len(available))]
+        else:
+            j = available[0]
+            best_r = remaining[j]
+            for k in available[1:]:
+                if remaining[k] > best_r:
+                    best_r = remaining[k]
+                    j = k
+        oi = op_counter[j]
+        os.append(j)
+        op_counter[j] = oi + 1
+        remaining[j] -= min_t2[j][oi]
+        if op_counter[j] >= len(jobs[j]):
+            available.remove(j)
+        alts = jobs[j][oi]
+        ma.append(min(alts, key=lambda x: x[2])[0])
+    return os, ma
+
+
+# 初始化变体注册表：名称 -> (random, ls, gw, spt, mwr) 的整数配比
+#
+# 论文口径只有 "mix3"（等价于原来的 init_mix3 硬编码实现）；
+# 其余条目是**本轮新增的变体扫描对象** —— MIX3 是消融阶梯里最大的单一组件
+# （+14.46%***），却从未做过变体扫描；而它三条分支全部放弃了 OS 维度。
+INIT_VARIANTS = {
+    "mix3":        (1, 1, 1, 0, 0),   # 论文口径
+    "random":      (1, 0, 0, 0, 0),   # = 论文 RMOEA/D1
+    "mix3_spt":    (1, 1, 0, 1, 0),   # 用 OS-SPT 替换 GW 分支
+    "mix3_mwr":    (1, 1, 0, 0, 1),   # 用 OS-MWR 替换 GW 分支
+    "mix3_gw_spt": (1, 1, 1, 1, 0),   # 加一路 OS-SPT（4 等分）
+    "half_random": (2, 1, 1, 0, 0),   # 提高随机占比
+    "no_random":   (0, 1, 1, 0, 0),   # 去掉随机分支
+}
+
+
+def init_by_variant(instance, n_pop, rng, variant="mix3"):
+    """按变体配比组合初始化策略。
+
+    分桶用「最大余额法」，保证各桶之和恰好 n_pop；个体排列顺序固定为
+        [random, ls, gw, spt, mwr]
+    与原始 `init_mix3` 的 [random, ls, gw] 顺序一致 —— 因此
+    `init_by_variant(inst, n, rng, "mix3")` 与 `init_mix3(inst, n, rng)`
+    在同 seed 下**逐位相同**（见 tests 里的等价锁）。
+    """
+    if variant not in INIT_VARIANTS:
+        raise ValueError("unknown init variant: %r (可选: %s)"
+                         % (variant, sorted(INIT_VARIANTS)))
+    ratios = INIT_VARIANTS[variant]
+    total = sum(ratios)
+    if total == 0:
+        raise ValueError("variant %r 的配比全为 0" % variant)
+
+    # 每桶 n_pop // total * ratio 个；**余数全部补进 random 桶并追加在末尾** ——
+    # 这正是 init_mix3 的 `while len(population) < n_pop: append(init_random(...))`。
+    # 必须逐字复刻：random / ls / gw 三者消耗的随机数**个数**不同，一旦余数的
+    # 落点变了，rng 的消耗顺序就变，"mix3" 不再逐位等价于论文口径。
+    base = n_pop // total
+    counts = [base * r for r in ratios]
+    rest = n_pop - sum(counts)
+
+    generators = (init_random, init_ls, init_gw, init_os_spt, init_os_mwr)
+    population = []
+    for gen, c in zip(generators, counts):
+        for _ in range(c):
+            population.append(gen(instance, rng))
+    for _ in range(rest):
+        population.append(init_random(instance, rng))
+    return population
+
+
 def pox_crossover(os1, os2, rng):
     """Precedence Operation Crossover for OS vectors.
     基于工件顺序的交叉(POX)：随机分组，保留一组工件位置，其余按另一父代顺序填充。"""
@@ -166,20 +300,53 @@ def _get_op_index(os_vec, idx):
     return job_id, count
 
 
+def fallback_candidates(instance):
+    """惰性预构建「候选机器列表」表：(job, oi) -> list，供不合法位置随机挑选。
+
+    原实现每次现场 `list(valid_machines[j][oi])` 构造一次；POX 交叉后平均每次
+    repair 有 ~11 处不合法，故这个转换是热路径。改成一次性构建并缓存。
+    同一进程内 `list(set)` 的结果是确定的，故缓存内容与现场构造逐位相同。
+    """
+    tbl = instance.get("_fallback_candidates")
+    if tbl is None:
+        tbl = [[list(s) for s in job_valid]
+               for job_valid in instance["valid_machines"]]
+        instance["_fallback_candidates"] = tbl
+    return tbl
+
+
 def _repair_ma_for_os(os_vec, ma_vec, instance, rng):
     """Repair MA to ensure each machine is valid for its corresponding operation in OS.
     修复MA向量：确保每个位置的机器对应该位置工序的候选机器集。
-    使用预计算的 valid_machines 集合，O(1) 查找替代 O(n_alts) 遍历。
+
+    **两处等价改写（随机流逐位不变）**
+
+    1. `rng.choice(list(set))` → `cand_list[rng.randint(len(cand_list))]`。
+       `RandomState.choice` 即便 `size=None` 也走 `np.prod(size)` 通用路径，实测
+       8.2us/次；`randint` 只要 2.0us。两者消耗的底层随机数序列**逐位相同**——
+       `scripts/diag_rng_equiv.py` 对 k=1..15 逐位比对过 rng 状态缓冲（值 + buffer
+       + 内部位置三者全同）。而 POX 交叉后平均每次调用有 ~11 处不合法，
+       所以这是本模块最大的单点开销。
+    2. `list(valid_machines[j][oi])` 预缓存进 `_fallback_candidates`，省掉集合转列表。
+
+    **刻意不用 numpy 批量化**：实测（`scripts/profile_wall.py`）把 240 元素的检查
+    循环换成 `argsort` + fancy-index 之后整体反而**慢 8–11%** —— numpy 每次调用的
+    固定开销摊不平 240 次纯 Python 循环的成本。cProfile 会严重高估纯 Python 循环
+    的相对成本（逐行插桩），据此做的优化决策是错的。
+
+    等价性锁：`tests/test_refactor.py::TestRepairFastPath`。
     """
     ma_vec = ma_vec.copy()
-    op_counter = [0] * instance["n_jobs"]
     valid_machines = instance["valid_machines"]
+    fallback = fallback_candidates(instance)
+    op_counter = [0] * instance["n_jobs"]
     for idx, job_id in enumerate(os_vec):
         oi = op_counter[job_id]
-        op_counter[job_id] += 1
+        op_counter[job_id] = oi + 1
         if ma_vec[idx] not in valid_machines[job_id][oi]:
             # 随机选一个合法机器（集合随机选择比列表重建快）
-            ma_vec[idx] = rng.choice(list(valid_machines[job_id][oi]))
+            cand = fallback[job_id][oi]
+            ma_vec[idx] = cand[rng.randint(len(cand))]
     return ma_vec
 
 
@@ -193,7 +360,7 @@ def mutate_ma(ma_vec, os_vec, instance, rng):
     current_m = ma_vec[idx]
     candidates = [alt[0] for alt in alts if alt[0] != current_m]
     if candidates:
-        ma_vec[idx] = int(rng.choice(candidates))
+        ma_vec[idx] = candidates[rng.randint(len(candidates))]
     return ma_vec
 
 

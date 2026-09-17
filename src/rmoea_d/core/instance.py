@@ -70,6 +70,12 @@ def parse_fjs(text, seed=42):
             job_valid.append({alt[0] for alt in op})
         valid_machines.append(job_valid)
 
+    # ── 预计算每道工序的最小 t2（最可能时间）──
+    # 供 OS 维度的派工式初始化（init_os_spt / init_os_mwr）O(1) 取用代表加工时间
+    min_t2 = []
+    for job in jobs:
+        min_t2.append([min(alt[2] for alt in op) for op in job])
+
     return {
         "n_jobs": n_jobs,
         "n_machines": n_machines,
@@ -77,6 +83,7 @@ def parse_fjs(text, seed=42):
         "total_ops": total_ops,
         "crisp_times": crisp_times,      # 供 decode_crisp() 零分配解码
         "valid_machines": valid_machines, # 供 _repair_ma_for_os O(1) 校验
+        "min_t2": min_t2,                 # 供派工式初始化（OS 维度）
     }
 
 
