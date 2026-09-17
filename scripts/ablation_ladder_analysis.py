@@ -186,7 +186,11 @@ def main():
         instances = [i for i in instances if i not in empty_inst]
         for i in empty_inst:
             seeds_by_inst.pop(i, None)
-    n_runs = sum(len(s) for s in seeds_by_inst.values())
+    # 两个不同的量，别混：
+    #   n_total_runs = 结果文件里的 run 条数（臂 x 实例 x seed）
+    #   n_obs        = 参与跨臂配对的观测单元数（实例 x 交集内的 seed）—— 配对检验的 n
+    n_total_runs = len(rows)
+    n_obs = sum(len(s) for s in seeds_by_inst.values())
     # 有臂在实例上缺 seed 时提示（不静默丢数据）
     dropped = {inst: sorted({r["seed"] for r in rows if r["instance"] == inst}
                             - set(seeds_by_inst[inst])) for inst in instances}
@@ -194,7 +198,7 @@ def main():
 
     print("=" * 100)
     print(f"论文 6 级消融阶梯分析  |  实例 {instances}  |  臂 {len(labels)}  |  "
-          f"runs {len(rows)}")
+          f"runs {n_total_runs}（配对观测 {n_obs}）")
     print(f"参考集归一化（逐实例，所有臂所有 run 的前沿并集），ref = {REF}")
     for inst in instances:
         lo, hi = bounds[inst]
@@ -513,7 +517,8 @@ def main():
     payload = {
         "lab_json": args.lab_json,
         "instances": instances,
-        "n_runs": n_runs,
+        "n_total_runs": n_total_runs,
+        "n_paired_obs": n_obs,
         "hv_definition": "reference-set normalization per instance, ref=(1.02,1.02)",
         "mean_hv": {lbl: dict(zip(instances, M[lbl].round(8).tolist())) for lbl in labels},
         "friedman_rank_all_arms": (dict(zip(labels, rank_all.round(6).tolist()))

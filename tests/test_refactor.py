@@ -808,12 +808,14 @@ class TestLadderAnalysisPartialData(unittest.TestCase):
         self.assertIn("Mk02", r.stdout)
 
     def test_uses_seed_intersection_not_union(self):
-        """报告里的 runs 数必须按交集算：Mk01 交集 6 + Mk02 交集 4 = 10。
-        若按并集（每实例 6）会得到 12，故 10 能区分两种口径。"""
+        """报告里的**配对观测数**必须按交集算：Mk01 交集 6 + Mk02 交集 4 = 10。
+        若按并集（每实例 6）会得到 12，故 10 能区分两种口径。
+        总 run 数另算，且不受交集影响：Mk01 4臂x6 + Mk02 (3臂x6 + 1臂x4) = 46。"""
         import json
         r, out = self._run_analysis(self._rows())
         payload = json.load(open(out, encoding="utf-8"))
-        self.assertEqual(payload["n_runs"], 6 + 4)
+        self.assertEqual(payload["n_paired_obs"], 6 + 4)
+        self.assertEqual(payload["n_total_runs"], 24 + 22)
 
 
 if __name__ == "__main__":
