@@ -1,5 +1,10 @@
 *.pyc
 *.log
+_*.txt
+_*.json
+_*.py
+_tmp*
+/scratch/
 /logs
 /results
 /charts

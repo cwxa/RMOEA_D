@@ -35,6 +35,8 @@ class MOEADBaseline(RMOEAD):
         seed=42,
         data_dir="data",
         timeout=None,
+        enable_mix3=True,
+        enable_elite=True,
     ):
         """
         Initialize baseline MOEA/D solver.
@@ -49,6 +51,9 @@ class MOEADBaseline(RMOEAD):
             seed: Random seed
             data_dir: Directory containing .fjs files
             timeout: Maximum wall-clock time in seconds (None = no limit)
+            enable_mix3: True 用 MIX3 初始化；False 用纯随机初始化
+                         （复现论文 RMOEA/D1 时需要 False）
+            enable_elite: True 启用精英档案；False 时输出退化为末代种群前沿
         """
         super().__init__(
             instance_name=instance_name,
@@ -59,6 +64,8 @@ class MOEADBaseline(RMOEAD):
             data_dir=data_dir,
             fixed_T=fixed_T,
             enable_rvns=False,
+            enable_mix3=enable_mix3,
+            enable_elite=enable_elite,
             timeout=timeout,
             algorithm_name="MOEA/D",
             algo_dir_name="MOEA_D",

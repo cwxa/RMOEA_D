@@ -28,9 +28,9 @@
 | Elite archive（大小 = Np，历史非支配解） | §4.7, Algorithm 5 | `algorithm.py::_update_archive` | ✅ |
 | Np=100, G=200, 每实例 30 次独立运行 | §5.2 | 同 | ✅ |
 | 评价指标 = HV | §5 | 同 | ✅（归一化口径见 §4.1） |
-| 变体阶梯 D1→D2→D3→D4→D5→RMOEA/D | §5.4 | 见 §2 的两处**结构性差异** | ⚠️ 部分 |
+| 变体阶梯 D1→D2→D3→D4→D5→RMOEA/D | §5.4 | `scripts/ablation_ladder.py`（8 臂，含论文缺失的 D1/D2） | ✅ 已补齐 |
 
-**两处必须声明的结构性差异**
+**三处必须声明的结构性差异**
 
 1. **阶梯的切分点不同。** 论文的阶梯是「逐级累加」：D3 已经有**随机选择的 VNS**，D4 只是在其上
    加 Q-PAS，最后一级才把随机选择换成 RVNS。本项目的 `baseline`（`T10`）**完全没有局部搜索**，
@@ -38,6 +38,16 @@
    臂后两者才可分离（见 §3）。
 2. **论文的 D3「随机 VNS」在本项目原先缺失。** 已补：`core/rvns.py` 新增 `mode="random"`
    （五算子等概率随机选，对应论文 §4.6 用法 (1)），即 RMOEA/D3。
+3. **论文的 D1 / D2 在本项目原先无法构造。** `RMOEAD` 把 MIX3 初始化与 Elite archive
+   写死在代码里，所以"纯 MOEA/D"（D1）和"+MIX3"（D2）两个中间级根本没有对应的配置。
+   已补两个开关 `enable_mix3` / `enable_elite`（默认 `True`，不改变既有行为），
+   现在 §5.4 的六级阶梯可以在同一份代码上逐级打开。实验台见
+   `scripts/ablation_ladder.py`，分析见 `scripts/ablation_ladder_analysis.py`，
+   诊断结论见 `docs/ablation-qpas-rvns-diagnosis.md` §9。
+   **已按全量跑完**：8 臂 × 10 实例 × 30 seeds = 2400 runs，
+   整梯 Friedman p=6.74e-07 \*\*\*，D1→RMOEA/D 排名增益 +3.80（论文 +2.22）。
+   阶梯的 `enable_mix3` / `enable_elite` 开关有回归测试锁住
+   （`tests/test_refactor.py::TestLadderSwitches` / `TestLadderDefinition`）。
 
 ---
 
@@ -50,11 +60,17 @@
 
 | 阶梯步骤 | 排名增益 | 平均 ΔHV | 相对 | 改善实例 | 精确符号检验 |
 |---|---|---|---|---|---|
-| MIX3 初始化 | −0.22 | +0.002268 | **+5.06%** | 17/23 | **p=0.035 \*** |
-| 随机选择 VNS | −0.78 | +0.000744 | **+1.29%** | 17/23 | **p=0.035 \*** |
-| **Q-PAS** | **−0.52** | +0.000242 | **+0.56%** | **15/23** | **p=0.210 n.s.** |
-| Elite archive | −0.17 | −0.000051 | −0.19% | 14/23 | p=0.405 n.s. |
-| **RVNS**（替代随机 VNS） | **−0.52** | +0.000088 | **+0.15%** | **13/23** | **p=0.678 n.s.** |
+| MIX3 初始化 | +0.22 | +0.002268 | **+5.06%** | 17/23 | **p=0.035 \*** |
+| 随机选择 VNS | +0.78 | +0.000744 | **+1.29%** | 17/23 | **p=0.035 \*** |
+| **Q-PAS** | **+0.52** | +0.000242 | **+0.56%** | **15/23** | **p=0.210 n.s.** |
+| Elite archive | +0.17 | −0.000051 | −0.19% | 14/23 | p=0.405 n.s. |
+| **RVNS**（替代随机 VNS） | **+0.52** | +0.000088 | **+0.15%** | **13/23** | **p=0.678 n.s.** |
+
+> 符号约定：**排名增益 = rank(上一级) − rank(这一级)，>0 = 排名变好**（名次数字下降）。
+> ΔHV 越大越好，>0 即该组件正贡献。
+
+**这些步骤的显著性很弱**（唯一两个达 * 的是 MIX3 与随机 VNS，且用的是比配对
+Wilcoxon 弱的实例级符号检验），**论文从未对任何单个组件做过配对检验**。
 
 只看 FMk01–FMk10（本项目的基准）：
 
@@ -150,6 +166,31 @@ against the last one. That proves the effectiveness of each part."*
    （诊断文档 §1.1：修掉后 mk01 的 Friedman p 从 0.668 变成 0.0046）。
    **这一点值得在论文里明确写清归一化盒的来源。**
 
+### 2.5 论文 §5.4 那句断言的逐实例查证
+
+论文 §5.4 原文：*"each part improves the result against the last one."*
+这是一个**逐实例**的断言。把 Table 5 的 23 个实例按阶梯顺序逐一查单调性
+（HV 越大越好，要求相邻每级**严格递增**）：
+
+**只有 2 个实例（R7、FMk10）逐级单调；其余 21 个都有倒退。**
+
+| 倒退级 | 出现的实例数 |
+|---|---|
+| `RMOEA/D5 -> RMOEA/D`（换成 RVNS） | **8** |
+| `RMOEA/D4 -> RMOEA/D5`（加 Elite archive） | 7 |
+| `RMOEA/D3 -> RMOEA/D4`（加 Q-PAS） | 5 |
+| `RMOEA/D1 -> RMOEA/D2`（加 MIX3） | 5 |
+| `RMOEA/D2 -> RMOEA/D3`（加随机 VNS） | 3 |
+
+最刺眼的两处：**FMk01 的 D1（0.058504）反而高于 D2（0.055246）**；
+**FMk08 的 D1 > D2 > D3 连续三级倒退**。
+
+→ **这句话真正成立的层次是「Friedman 平均排名逐级改善」**
+（4.6087 → 4.3913 → 3.6087 → 3.0870 → 2.9130 → 2.3913，确实是单调的）。
+两者不矛盾，但**不能把平均排名的单调性当作每个实例的单调性**——
+这是审稿人最容易挑的一点，建议论文里改写为
+「Friedman 平均排名逐级改善」并补上单组件的配对检验。
+
 ---
 
 ## 3. 复现结果：组件分解（Mk10，n=30，同强度配对）
@@ -197,14 +238,24 @@ HV 按参考集归一化（所有臂所有 run 的前沿并集，ref=(1.02,1.02)
 
 **可以主张（证据扎实）**
 
-- 局部搜索对 RMOEA/D 贡献最大，且**邻域尝试次数是关键设计变量**——论文 Algorithm 4 的
+- **按论文 §5.4 的完整六级阶梯，MIX3 初始化是最大的单一组件（+14.46%，10/10 实例，
+  p=0.00195\*\*），其次是局部搜索（+3.72%，10/10，p=0.00195\*\*）。**
+  （注意：§3 的 Mk10 组件分解因为 baseline 已含 MIX3 而**看不到**这一环。）
+- **Elite archive 有真实但微小的正效应**（+0.28%，10/10 实例，2×2 主效应 293/300，
+  p=8.5e-50\*\*\*）——统计上极稳，但效应量小到没有实际意义，报的时候两个数都要给。
+- 局部搜索对 RMOEA/D 贡献显著，且**邻域尝试次数是关键设计变量**——论文 Algorithm 4 的
   单步 first-improvement 设置削弱了 RVNS 自身的 RL 机制；提到 `ls_trials=3` 后
   RL 引导选算子才转为显著的 +1.86%（p=0.045\*）。
 - 用**逐实例配对检验**报告消融（论文只做了整梯 Friedman 排名），并给出效应量而非仅排名。
 
 **不要主张（会被审稿人抓住）**
 
-- ❌ 不要声称 Q-PAS 有显著贡献。四个独立语境均 n.s.，且在强局部搜索下为负。
+- ❌ **不要写「每一级都优于上一级」。** 论文自己的 Table 5 在 23 个实例里只有 2 个
+  逐级单调（见 §2.5）。改正为「Friedman 平均排名逐级改善」。
+- ❌ **不要声称 RVNS 的 RL 选算子有正贡献。** 阶梯里 D5→RMOEA/D 这一步是**唯一的倒退级**
+  （−0.02%，6/10 实例 D5 更好，p=0.92）；论文自身数据在同一级也倒退（8/23，全场最高频）。
+- ❌ 不要声称 Q-PAS 有显著贡献。五个独立语境均 n.s.，且在强局部搜索下为负；
+  阶梯里其 T 使用分布约 25%/档，与均匀随机无差别（见诊断文档 §9.3(d)）。
   可写成："Q-PAS 在本基准上未产生可检测的增益；其作用依赖于邻域大小 T 是否为有效杠杆
   （Mk01 上 T 是弱杠杆，Friedman p=0.15）。"
 - ❌ 不要用"前沿延展度 EXT"为 Q-PAS 辩护。Mk01 上 EXT 看起来 +13.3%（p=0.017），
@@ -230,6 +281,21 @@ HV 按参考集归一化（所有臂所有 run 的前沿并集，ref=(1.02,1.02)
 python scripts/paper_table5_audit.py
 #   -> logs/_paper_audit.txt / .json
 
+# ── 论文 §5.4 的完整 6 级阶梯（逐级累加；含论文缺失的 D1/D2）──
+# 推荐：按实例分批驱动（单个 Mk10 很慢，一次提交 2400 条容易被超时打断）
+python scripts/ladder_run_all.py --instances Mk01,...,Mk10 --seeds 30 --workers 6
+#   -> logs/ablation_ladder.json（断点续跑；每批只跑一个实例的 240 条）
+
+# 也可以直接调实验台本体（单实例 / 多实例皆可，同样支持断点续跑）
+python scripts/ablation_ladder.py --instance Mk10 --seeds 30 --workers 6
+#   -> logs/ablation_ladder.json（未跑满时进度落在 *.partial.json）
+
+python scripts/ablation_ladder_analysis.py --lab_json logs/ablation_ladder.json
+#   -> logs/ablation_ladder.json.analysis.json
+# 阶梯图
+python scripts/ladder_plot.py --lab_json logs/ablation_ladder.json
+#   -> charts/ablation/paper_ladder_reproduction.png
+
 # Mk10 组件分解实验台（分批 / 增量落盘 / 可断点续跑）
 python scripts/t_leverage_sweep.py --instance Mk10 \
     --arms T05,T10,T15,T20,T50,T100,RandVNS,RVNSonly,RandVNS_t3,RVNSonly_t3,Full_t3
@@ -239,8 +305,9 @@ python scripts/t_leverage_analysis.py --lab_json logs/_mk10_lab.json
 python logs/_plot_paper_cmp.py        # -> charts/ablation/paper_vs_reproduction.png
 ```
 
-产物：图 `charts/ablation/paper_vs_reproduction.png`；原始数据 `logs/_mk10_lab.json`；
-论文审计 `logs/_paper_audit.txt`。
+产物：图 `charts/ablation/paper_vs_reproduction.png` 与
+`charts/ablation/paper_ladder_reproduction.png`；原始数据 `logs/_mk10_lab.json`、
+`logs/ablation_ladder.json`；论文审计 `logs/_paper_audit.txt`。
 
 > 注：`charts/` 与 `logs/` 均在 `.gitignore` 中，不会入库。
 > HV 用**参考集归一化**（`utils/metrics.py`），不要直接读结果 JSON 里的 `final_hv`

@@ -137,12 +137,13 @@ def main():
     w("-" * 92)
     for label, f, t in STEPS:
         s = step_stats(f, t)
-        rk = TABLE4_RANK[VARIANTS[t]] - TABLE4_RANK[VARIANTS[f]]
+        # rank gain = rank(上一级) − rank(这一级)：名次数字下降 = 变好 => 正值
+        rk = TABLE4_RANK[VARIANTS[f]] - TABLE4_RANK[VARIANTS[t]]
         w(f"{label:<28}{rk:+10.4f}{s['mean']:+11.6f}{s['mean_rel']:+9.2f}%"
           f"{s['n_pos']:>6}/{s['n']:<3}{s['p_sign']:>10.4f}")
     w("-" * 92)
-    w("rank gain = drop in Friedman average rank (Table 4). Larger = paper")
-    w("credits this component more. mean d% is on the raw HV level.")
+    w("rank gain = drop in Friedman average rank (>0 = rank improved). Larger =")
+    w("paper credits this component more. mean d% is on the raw HV level.")
     w("")
 
     w("-- 2. the Q-PAS rung alone (RMOEA/D3 -> RMOEA/D4) " + "-" * 44)

@@ -23,7 +23,7 @@ import json
 import os
 
 from .core.instance import load_instance
-from .core.operators import init_mix3
+from .core.operators import init_mix3, init_random
 from .core.encoding import decode, decode_with_schedule, decode_crisp
 from .core.moead import generate_weights, compute_neighbors, moead_generation
 from .core.qlearning import QLearningPAS
@@ -61,6 +61,8 @@ class RMOEAD:
         rvns_lp=40,
         rvns_ls_trials=1,
         rvns_mode="rl",
+        enable_mix3=True,
+        enable_elite=True,
         fixed_T=None,
         timeout=None,
         algorithm_name="RMOEA/D",
@@ -88,6 +90,10 @@ class RMOEAD:
             rvns_ls_trials: RVNS 每个解每代最多尝试的邻域次数 (论文为 1)
             rvns_mode: "rl" 按 SM/FM 轮盘赌选算子；"random" 五算子等概率随机选
                        （论文 Section 4.6 用法 (1)，即 RMOEA/D3 的随机 VNS）
+            enable_mix3: True 用 MIX3 初始化（1/3 随机 + 1/3 最短时间 + 1/3 全局负载，
+                        论文 RMOEA/D2 的贡献点）；False 退化为纯随机初始化 = RMOEA/D1
+            enable_elite: True 启用精英档案（论文 RMOEA/D5 的贡献点）；
+                         False 时最终前沿直接取末代种群的非支配集，档案不参与输出
             fixed_T: Fixed neighborhood size (if None, use Q-learning)
             timeout: Maximum wall-clock time in seconds (None = no limit)
             algorithm_name: Algorithm name for result metadata
@@ -100,6 +106,8 @@ class RMOEAD:
         self.seed = seed
         self.data_dir = data_dir
         self.enable_rvns = enable_rvns
+        self.enable_mix3 = enable_mix3
+        self.enable_elite = enable_elite
         self.fixed_T = fixed_T
         self.timeout = timeout
         self.algorithm_name = algorithm_name
@@ -144,11 +152,18 @@ class RMOEAD:
                      seed, crossover_rate, ql_alpha, ql_gamma, ql_epsilon)
 
     def _init_population(self):
-        """Initialize population using MIX3 strategy.
-        初始化种群：随机生成 → crisp decode 目标值（热路径零分配）。"""
-        logger.debug("Initializing population with MIX3 strategy...")
+        """Initialize the population.
+
+        默认用 MIX3 策略（论文 RMOEA/D2 的贡献点）；
+        `enable_mix3=False` 时退化为纯随机初始化，即论文 RMOEA/D1。
+        初始化：随机生成 → crisp decode 目标值（热路径零分配）。"""
+        logger.debug("Initializing population with %s strategy...",
+                     "MIX3" if self.enable_mix3 else "random")
         start = time.perf_counter()
-        pop = init_mix3(self.instance, self.n_pop, self.rng)
+        if self.enable_mix3:
+            pop = init_mix3(self.instance, self.n_pop, self.rng)
+        else:
+            pop = [init_random(self.instance, self.rng) for _ in range(self.n_pop)]
         objectives = []
         for os_vec, ma_vec in pop:
             mc, wc = decode_crisp(os_vec, ma_vec, self.instance)
@@ -162,11 +177,21 @@ class RMOEAD:
         return non_dominated_sort(objectives)
 
     def _update_archive(self, population, objectives):
-        """Update elite archive with non-dominated solutions."""
-        # Combine archive and current population
-        combined = self.archive + [
-            (pop[0], pop[1], obj) for pop, obj in zip(population, objectives)
-        ]
+        """Update the elite archive (论文 RMOEA/D5 的贡献点).
+
+        `enable_elite=False` 时档案退化为「当前种群的非支配集」——
+        即没有跨代积累能力，输出随之退化为末代种群的前沿。
+        这与论文 RMOEA/D1–D4 的行为一致（它们尚无 Elite archive）。
+        """
+        if self.enable_elite:
+            # Combine archive and current population
+            combined = self.archive + [
+                (pop[0], pop[1], obj) for pop, obj in zip(population, objectives)
+            ]
+        else:
+            # 无档案积累：只保留当前代
+            combined = [(pop[0], pop[1], obj)
+                        for pop, obj in zip(population, objectives)]
         # Extract objectives for sorting
         objs = [item[2] for item in combined]
         nd_objs = non_dominated_sort(objs)
@@ -209,6 +234,9 @@ class RMOEAD:
         # Initialize weights
         self.weights = generate_weights(self.n_pop)
         logger.debug("Weight vectors generated: %d vectors", len(self.weights))
+
+        # 档案开关变化时必须重置，避免复用上一次 solve() 的残留状态
+        self.archive = []
 
         # Initialize Q-learning (only when adaptive T is needed)
         if self.fixed_T is None:
@@ -326,6 +354,7 @@ class RMOEAD:
 
         # Re-decode archive solutions to get fuzzy objectives for final output
         # 对存档中的解重新解码，获取完整的模糊目标值用于最终输出
+        # enable_elite=False 时档案只是「末代种群的非支配集」，等价于纯 MOEA/D 输出
         fuzzy_archive = []
         for os_vec, ma_vec, _ in self.archive:
             fm, fw, _, _ = decode(os_vec, ma_vec, self.instance)
@@ -400,9 +429,19 @@ class RMOEAD:
             "timeout": self.timeout,
             "history": self.history,
             "q_table": self.ql.q_table.tolist() if self.ql else None,
+            "actions": list(self.ql_actions) if self.ql else None,
             "ql_reward_mode": self.ql_reward_mode if self.ql else None,
             "ql_cv_normalize": self.ql_cv_normalize if self.ql else None,
             "rvns_final_probs": self.rvns.get_probabilities() if self.rvns else None,
+            # ── 组件开关（消融阶梯复现需要，便于从结果反查配置）──
+            "components": {
+                "mix3": self.enable_mix3,
+                "qpas": self.fixed_T is None,
+                "rvns": self.enable_rvns,
+                "rvns_mode": self.rvns_mode if self.enable_rvns else None,
+                "elite": self.enable_elite,
+                "fixed_T": self.fixed_T,
+            },
             # ── 调度过程数据 (用于甘特图和结果分析) ──
             "schedules": best_schedules,
             "best_solution": best_solution,
