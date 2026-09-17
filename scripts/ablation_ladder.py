@@ -22,8 +22,14 @@
     # 单实例
     python scripts/ablation_ladder.py --instance Mk01 --seeds 30 --workers 6
 
-    # 全部 10 个实例（论文用 23 个，本复现只有 Mk01~Mk10）
-    python scripts/ablation_ladder.py --instances Mk01,...,Mk10 --seeds 30 --workers 6
+    # 多个实例：**必须逐个列出**，实例名要真实存在于 data_dir
+    # （不支持 "Mk01,...,Mk10" 这类省略写法——"..." 会被当成一个实例名）
+    python scripts/ablation_ladder.py \\
+        --instances Mk01,Mk02,Mk03,Mk04,Mk05,Mk06,Mk07,Mk08,Mk09,Mk10 \\
+        --seeds 30 --workers 6
+
+    # 更省事：用分批驱动脚本，它默认就是 Mk01~Mk10，且能扛住单批超时
+    python scripts/ladder_run_all.py --seeds 30 --workers 6
 
     # 只跑某几条臂
     python scripts/ablation_ladder.py --instance Mk10 --arms D1,D2,D3 --seeds 30
@@ -131,6 +137,20 @@ def _run_one(job):
 LADDER_DICT = {lbl: kw for lbl, _, kw in LADDER}
 
 
+def _available_instances(data_dir):
+    """列出 ``data_dir`` 下真实存在的实例名（``<name>.fjs``）。
+
+    用于**早失败**：实例名写错（典型是 "Mk01,...,Mk10" 里的 "..."）时，
+    原来要等到每个 job 在子进程里抛异常、跑满整个批次之后才发现，
+    而且因为 ``requested`` 永远凑不齐，结果文件**永远不会提升为主文件** ——
+    表现是"跑了一整轮但什么都没落盘"。这里提前拦掉。
+    """
+    d = data_dir if os.path.isabs(data_dir) else os.path.join(ROOT, data_dir)
+    if not os.path.isdir(d):
+        return None
+    return {os.path.splitext(f)[0] for f in os.listdir(d) if f.endswith(".fjs")}
+
+
 def _dump(rows, path):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -191,6 +211,17 @@ def main():
     if not instances:
         ap.error("必须给 --instance 或 --instances")
 
+    # 实例名早校验：拼错的话下面每个 job 都会在子进程里失败，
+    # 而 requested 永远凑不齐 -> 结果永远不落盘（最坏情况白跑一整轮）。
+    known = _available_instances(args.data_dir)
+    if known is not None:
+        bad = [i for i in instances if i not in known]
+        if bad:
+            hint = ""
+            if any(("..." in b) or ("," in b) for b in bad):
+                hint = ("；实例名要逐个列出，不支持 'Mk01,...,Mk10' 这类省略写法")
+            ap.error(f"data_dir 里找不到实例 {bad}；可用 {sorted(known)}{hint}")
+
     arms = ([s.strip() for s in args.arms.split(",") if s.strip()] if args.arms
             else LABELS)
     unknown = [a for a in arms if a not in LADDER_DICT]
@@ -223,7 +254,8 @@ def main():
 
     if not jobs:
         print("没有待跑任务，直接进入分析。")
-        _report(args)
+        # partial 若还在，说明上一轮是在收尾前被中断的，它比主文件更新
+        _report(partial if os.path.exists(partial) else args.out)
         return 0
 
     # rows 必须**同时**包含 partial 里已有的进度：
@@ -274,27 +306,34 @@ def main():
                 pass
         print(f"\n全部完成：{len(rows)} 条 run，用时 {time.perf_counter() - t_start:.0f}s")
         print(f"已写入 {args.out}\n")
+        _report(args.out)
     else:
-        # 保留 partial，主文件不动
+        # 保留 partial，主文件不动。注意此时**新完成的 run 只在 partial 里**，
+        # 就地分析必须读 partial，否则会拿着上一批的旧数据出报告
+        # （上一行刚说"累计 N 条"，报告却按旧条数算）。
         n_missing_inst = len({m[0] for m in missing})
         print(f"\n本批完成 {n_done} 条，累计 {len(rows)} 条；"
               f"仍有 {len(missing)} 条待跑（涉及 {n_missing_inst} 个实例）")
         print(f"进度已保存在 {partial}（断点续跑将自动跳过已完成组合）\n")
+        _report(partial)
 
-    _report(args)
     return 0
 
 
-def _report(args):
-    """跑完就地打印一次阶梯分析（完整分析见 scripts/ablation_ladder_analysis.py）。"""
+def _report(path):
+    """跑完就地打印一次阶梯分析（完整分析见 scripts/ablation_ladder_analysis.py）。
+
+    ``path`` 必须是**含最新进度**的那个文件：收尾成功时是主文件，
+    分批未跑满时是 ``*.partial.json``。
+    """
     import subprocess
     script = os.path.join(ROOT, "scripts", "ablation_ladder_analysis.py")
-    if not os.path.exists(script):
+    if not os.path.exists(script) or not os.path.exists(path):
         return
     print("=" * 78)
-    print("就地阶梯分析")
+    print(f"就地阶梯分析（数据源 {path}）")
     print("=" * 78)
-    r = subprocess.run([sys.executable, script, "--lab_json", args.out],
+    r = subprocess.run([sys.executable, script, "--lab_json", path],
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace")
     print(r.stdout or r.stderr)

@@ -248,6 +248,12 @@ def main():
         print(f"{lbl:<12}{name:<36}{v.mean():<12.5f}{sd:<11}"
               f"{rk:<15}{pr:<12}")
 
+    if rank_all is not None and len(labels) > len(ladder):
+        print("-" * 100)
+        print(f"注：上面 'Friedman rank' 是**{len(labels)} 条臂**一起排的"
+              f"（含 {len(labels) - len(ladder)} 条论文之外的分离臂）；"
+              f"可与论文 Table 4 直接比的是 [3] 里**论文 {len(ladder)} 级**的排名。")
+
     # ══════════════════════════════════════════════════════════════
     print("\n" + "=" * 100)
     print("[2] 相邻两级配对检验（每级只差一个组件 —— 组件效应的干净隔离）")
@@ -264,7 +270,9 @@ def main():
     # 图表读起来正好相反，故统一翻转。
     steps_report = []
     for a_lbl, b_lbl in zip(ladder[:-1], ladder[1:]):
-        comp = STEP_NOTE.get((a_lbl, b_lbl), "")
+        # 臂组合可以是论文六级的子集（`--arms D1,D2,D3`），相邻二级未必在
+        # STEP_NOTE 里 —— 退回用 "A->B" 命名，不要把组件名留空。
+        comp = STEP_NOTE.get((a_lbl, b_lbl), f"{a_lbl}->{b_lbl}")
         va, vb = M[a_lbl], M[b_lbl]          # 每元素 = 一个实例的均值
         d = vb - va                          # >0 = 新加的这一级更好
         # 相对增幅用**比值之比**（mean(d) / mean(base)），保证与 dHV 永远同号；
@@ -314,7 +322,9 @@ def main():
     print("-" * 100)
     run_report = []
     for a_lbl, b_lbl in zip(ladder[:-1], ladder[1:]):
-        comp = STEP_NOTE.get((a_lbl, b_lbl), "")
+        # 臂组合可以是论文六级的子集（`--arms D1,D2,D3`），相邻二级未必在
+        # STEP_NOTE 里 —— 退回用 "A->B" 命名，不要把组件名留空。
+        comp = STEP_NOTE.get((a_lbl, b_lbl), f"{a_lbl}->{b_lbl}")
         d, base = _paired_runs(a_lbl, b_lbl)
         if len(d) < 3:
             continue

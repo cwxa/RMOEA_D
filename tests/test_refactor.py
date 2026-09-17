@@ -818,5 +818,180 @@ class TestLadderAnalysisPartialData(unittest.TestCase):
         self.assertEqual(payload["n_total_runs"], 24 + 22)
 
 
+class TestRelativeGainConvention(unittest.TestCase):
+    """图、表、审计脚本三处的「相对增幅」必须是同一个估计量。
+
+    曾经的缺陷：``ablation_ladder_analysis.py`` 已统一为
+    ``mean(ΔHV)/mean(基线)``（比值之比），但 ``ladder_plot.py`` 仍用
+    ``mean(ΔHV/基线)``（各实例相对增幅的平均）。
+    后果是**同一个量在图上是 +16.47%、在文档表格里是 +14.46%**（差 2 个百分点），
+    因为比值之比与比值的均值在基线各实例不同的时候并不相等。
+    更糟的是旧口径在效应≈0 时可能与 ΔHV 反号 —— 正是上一轮修掉的毛病。
+    """
+
+    ROOT = os.path.join(os.path.dirname(__file__), "..")
+
+    def test_plot_uses_ratio_of_means(self):
+        """源码层面锁住：不得再用 `np.mean(d / M[...])` 这种『比值的均值』。"""
+        src = open(os.path.join(self.ROOT, "scripts", "ladder_plot.py"),
+                   encoding="utf-8").read()
+        self.assertNotIn("np.mean(d / M[", src,
+                         "ladder_plot.py 又用回了『比值的均值』，会与表/文档不一致")
+        self.assertIn("d.mean() / M[", src)
+
+    def test_plot_summary_matches_analysis_for_the_same_step(self):
+        """端到端：绘图脚本打印的 ΔvsD1 必须等于分析脚本给出的该级 rel_pct。"""
+        import json
+        import subprocess
+        import tempfile
+        script = os.path.join(self.ROOT, "scripts", "ladder_plot.py")
+        if not os.path.exists(script):
+            self.skipTest("ladder_plot.py 不存在")
+        rows = TestLadderAnalysisPartialData._rows()
+        d = tempfile.mkdtemp()
+        lab = os.path.join(d, "lab.json")
+        with open(lab, "w", encoding="utf-8") as fh:
+            json.dump(rows, fh)
+
+        # 分析侧：D1->D2 这一级的相对增幅
+        an = TestLadderAnalysisPartialData()
+        r, out = an._run_analysis(rows)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        step = [s for s in json.load(open(out, encoding="utf-8"))["steps_instance_level"]
+                if s["step"] == "D1->D2"]
+        self.assertTrue(step, "分析结果里应含 D1->D2")
+        want = step[0]["rel_pct"]
+
+        # 绘图侧：摘要里 D2 那一行的 ΔvsD1
+        rp = subprocess.run(
+            [sys.executable, script, "--lab_json", lab,
+             "--out", os.path.join(d, "fig.png")],
+            cwd=self.ROOT, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=300)
+        self.assertEqual(rp.returncode, 0, rp.stderr)
+        got = None
+        for line in rp.stdout.splitlines():
+            if line.strip().startswith("D2 "):
+                got = float(line.split("ΔvsD1=")[1].split("%")[0].replace("+", ""))
+        self.assertIsNotNone(got, f"摘要里没找到 D2 行\n{rp.stdout}")
+        self.assertAlmostEqual(got, want, places=2,
+                               msg=f"图上 {got:+.2f}% vs 表里 {want:+.2f}%")
+
+
+class TestLadderInstanceValidation(unittest.TestCase):
+    """实例名必须早校验。
+
+    曾经的缺陷：文档与 docstring 给的示例是 `--instances Mk01,...,Mk10`，
+    而 `...` 会被当成一个实例名传给每个 job。由于失败只在子进程里发生，
+    且 `requested` 永远凑不齐，结果文件**永远不会提升为主文件** ——
+    表现是"跑了一整轮却什么都没落盘"。
+    """
+
+    ROOT = os.path.join(os.path.dirname(__file__), "..")
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = os.path.join(os.path.dirname(__file__), "..", "scripts",
+                            "ablation_ladder.py")
+        if not os.path.exists(path):
+            raise unittest.SkipTest("ablation_ladder.py 不存在")
+        spec = importlib.util.spec_from_file_location("_abl_ladder_v", path)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_available_instances_lists_data_dir(self):
+        got = self.mod._available_instances("data")
+        if got is None:
+            self.skipTest("data/ 目录不存在")
+        self.assertIn("Mk01", got)
+        self.assertIn("Mk10", got)
+        self.assertNotIn("...", got)
+
+    def test_missing_data_dir_returns_none(self):
+        self.assertIsNone(self.mod._available_instances("no_such_dir_xyz"))
+
+    def test_ellipsis_is_rejected_early(self):
+        """`--instances Mk01,...,Mk10` 必须在跑任何 run 之前就失败。"""
+        import subprocess
+        script = os.path.join(self.ROOT, "scripts", "ablation_ladder.py")
+        r = subprocess.run(
+            [sys.executable, script, "--instances", "Mk01,...,Mk10",
+             "--seeds", "1", "--workers", "1"],
+            cwd=self.ROOT, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=300)
+        self.assertNotEqual(r.returncode, 0, "带 '...' 的实例名应被拒绝")
+        self.assertIn("...", r.stderr)
+
+    def test_source_mentions_early_validation(self):
+        src = open(os.path.join(self.ROOT, "scripts", "ablation_ladder.py"),
+                   encoding="utf-8").read()
+        self.assertIn("_available_instances(args.data_dir)", src)
+
+
+class TestLadderRunAllTimeout(unittest.TestCase):
+    """单批超时必须被当成『本批无进展』，而不是让驱动崩掉。
+
+    曾经的缺陷：`subprocess.run(..., timeout=...)` 抛出的 `TimeoutExpired`
+    没有捕获，一次慢批就会让整个驱动带着 traceback 退出，
+    **剩余实例一个都不跑**，`--attempts` 重试机制形同虚设。
+    """
+
+    ROOT = os.path.join(os.path.dirname(__file__), "..")
+
+    def test_driver_catches_timeout(self):
+        src = open(os.path.join(self.ROOT, "scripts", "ladder_run_all.py"),
+                   encoding="utf-8").read()
+        self.assertIn("except subprocess.TimeoutExpired", src)
+        self.assertIn("attempts", src)
+
+    def test_driver_exposes_per_batch_timeout(self):
+        src = open(os.path.join(self.ROOT, "scripts", "ladder_run_all.py"),
+                   encoding="utf-8").read()
+        self.assertIn("--per_batch_timeout", src)
+
+
+class TestPaperCmpPlot(unittest.TestCase):
+    """对照图脚本必须是**入库的**脚本，且配对要按 seed 取交集。"""
+
+    ROOT = os.path.join(os.path.dirname(__file__), "..")
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = os.path.join(os.path.dirname(__file__), "..", "scripts",
+                            "paper_cmp_plot.py")
+        if not os.path.exists(path):
+            raise unittest.SkipTest("paper_cmp_plot.py 不存在")
+        spec = importlib.util.spec_from_file_location("_paper_cmp", path)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_script_is_versioned_not_in_logs(self):
+        """文档引用的复现脚本不能放在 `logs/`（那里被 gitignore）。"""
+        self.assertTrue(os.path.exists(
+            os.path.join(self.ROOT, "scripts", "paper_cmp_plot.py")))
+        src = open(os.path.join(self.ROOT, "docs", "paper-vs-reproduction.md"),
+                   encoding="utf-8").read()
+        self.assertIn("scripts/paper_cmp_plot.py", src)
+        self.assertNotIn("python logs/_plot_paper_cmp.py", src)
+
+    def test_pairing_uses_seed_intersection(self):
+        """两臂 seed 集不同时，必须按交集配对，不能按位置硬减。"""
+        hv = {"a": {42: 0.10, 43: 0.12, 44: 0.14, 45: 0.16},
+              "b": {43: 0.10, 44: 0.11, 45: 0.12, 46: 0.99}}
+        v, e, p = self.mod.paired_stats(hv, "a", "b")
+        # 交集 {43,44,45}：d = [.02,.03,.04] -> mean .03，基线 b 均值 .11
+        self.assertAlmostEqual(v, 100.0 * 0.03 / 0.11, places=9)
+        self.assertTrue(0.0 <= p <= 1.0)
+
+    def test_too_few_pairs_yields_nan_not_a_crash(self):
+        """交集不足时给 nan。旧写法会 numpy 广播报错（4 vs 1）。"""
+        hv = {"a": {42: 0.1, 43: 0.2, 44: 0.3, 45: 0.4},
+              "b": {42: 0.1}}
+        v, e, p = self.mod.paired_stats(hv, "a", "b")
+        self.assertTrue(v != v and e != e and p != p, "应为 nan")
+
+
 if __name__ == "__main__":
     unittest.main()

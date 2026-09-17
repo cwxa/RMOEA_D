@@ -142,11 +142,15 @@ def main():
         return np.array(out)
 
     # ── 相对 D1 的逐级增量（%）──
+    # 口径必须与 ablation_ladder_analysis.py 完全一致：**mean(Δ) / mean(base)**
+    # （比值之比），而不是 mean(Δ / base)（各实例相对增幅的平均）。
+    # 两者在大效应上能差 2 个百分点（D1→D2：+14.46% vs +16.47%），
+    # 会让同一张图的 (a) 面板与 (c) 面板、以及图与文档表格互相打架。
     base = ladder[0]
     rel, rel_err, p_vs_base = [], [], []
     for l in ladder:
         d = np.array([M[l][k] - M[base][k] for k in range(len(instances))])
-        r = 100.0 * np.mean(d / M[base])
+        r = 100.0 * d.mean() / M[base].mean()
         e = 100.0 * d.std(ddof=1) / np.sqrt(len(d)) / M[base].mean() \
             if len(d) > 1 else 0.0
         rel.append(r)
@@ -238,7 +242,8 @@ def main():
     for a, b in items:
         # 统一符号约定：加上这一级的组件的效应 = HV(b) − HV(a)，>0 即正贡献
         d = np.array([M[b][k] - M[a][k] for k in range(len(instances))])
-        relv = 100.0 * np.mean(d / M[a])
+        # 同 (a) 面板：比值之比，与 ablation_ladder_analysis.py 的 rel_pct 逐位一致
+        relv = 100.0 * d.mean() / M[a].mean()
         e = 100.0 * d.std(ddof=1) / np.sqrt(len(d)) / M[a].mean() \
             if len(d) > 1 else 0.0
         pr = paired_runs(b, a)
@@ -260,7 +265,10 @@ def main():
                 color="0.15" if p < 0.05 else "0.45")
     ax.axvline(0, color="0.3", lw=1.0, zorder=2)
     ax.set_yticks(ys)
-    ax.set_yticklabels([STEP_COMPONENT[(a, b)] for a, b in items], fontsize=7.6)
+    # 臂组合不一定是论文那 6 条（`ablation_ladder.py --arms` 允许跑子集），
+    # 相邻二级未必落在 STEP_COMPONENT 里 —— 直接下标会 KeyError 崩掉整张图。
+    ax.set_yticklabels([STEP_COMPONENT.get((a, b), f"{a} → {b}")
+                        for a, b in items], fontsize=7.6)
     ax.set_ylim(-0.62, len(items) - 0.38)
     ax.set_xlim(-0.06 * span, span * 1.30)
     ax.set_xlabel("ΔHV from adding this component (%)\n"
@@ -326,7 +334,7 @@ def main():
         mat = np.array([M[l] for l in ladder])
         st, fp = stats.friedmanchisquare(*mat)
         foot = (f"instances: {', '.join(instances)}  |  n = 30 seeds per arm per instance  |  "
-                f"$N_p$=100, $G$=200  |  Friedman over the 6 paper variants: "
+                f"$N_p$=100, $G$=200  |  Friedman over {len(ladder)} arms: "
                 f"$\\chi^2$={st:.2f}, p={fp:.3g}\n"
                 f"HV by reference-set normalization per instance, ref=(1.02, 1.02); "
                 f"error bars: SEM of the paired difference; significance vs RMOEA/D1 "

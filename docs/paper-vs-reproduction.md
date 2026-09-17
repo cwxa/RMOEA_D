@@ -282,13 +282,17 @@ python scripts/paper_table5_audit.py
 #   -> logs/_paper_audit.txt / .json
 
 # ── 论文 §5.4 的完整 6 级阶梯（逐级累加；含论文缺失的 D1/D2）──
-# 推荐：按实例分批驱动（单个 Mk10 很慢，一次提交 2400 条容易被超时打断）
-python scripts/ladder_run_all.py --instances Mk01,...,Mk10 --seeds 30 --workers 6
+# 推荐：按实例分批驱动（单个 Mk10 很慢，一次提交 2400 条容易被超时打断；
+# 单批超时会被当成"本批无进展"自动重试，不会打断剩余实例）
+python scripts/ladder_run_all.py --seeds 30 --workers 6
 #   -> logs/ablation_ladder.json（断点续跑；每批只跑一个实例的 240 条）
+#   --instances 默认就是 Mk01~Mk10；如需自选，实例名**必须逐个列出**：
+#     --instances Mk01,Mk02,Mk03   （"Mk01,...,Mk10" 里的 "..." 会被当成实例名）
 
 # 也可以直接调实验台本体（单实例 / 多实例皆可，同样支持断点续跑）
 python scripts/ablation_ladder.py --instance Mk10 --seeds 30 --workers 6
-#   -> logs/ablation_ladder.json（未跑满时进度落在 *.partial.json）
+#   -> logs/ablation_ladder.json（未跑满时进度落在 *.partial.json；
+#      实例名不在 data_dir 里会立刻报错，不会白跑一整轮）
 
 python scripts/ablation_ladder_analysis.py --lab_json logs/ablation_ladder.json
 #   -> logs/ablation_ladder.json.analysis.json
@@ -301,8 +305,8 @@ python scripts/t_leverage_sweep.py --instance Mk10 \
     --arms T05,T10,T15,T20,T50,T100,RandVNS,RVNSonly,RandVNS_t3,RVNSonly_t3,Full_t3
 python scripts/t_leverage_analysis.py --lab_json logs/_mk10_lab.json
 
-# 对照图
-python logs/_plot_paper_cmp.py        # -> charts/ablation/paper_vs_reproduction.png
+# 对照图（依赖上面两个脚本产出的 logs/_paper_audit.json 与 logs/_mk10_lab.json）
+python scripts/paper_cmp_plot.py      # -> charts/ablation/paper_vs_reproduction.png
 ```
 
 产物：图 `charts/ablation/paper_vs_reproduction.png` 与
@@ -312,3 +316,8 @@ python logs/_plot_paper_cmp.py        # -> charts/ablation/paper_vs_reproduction
 > 注：`charts/` 与 `logs/` 均在 `.gitignore` 中，不会入库。
 > HV 用**参考集归一化**（`utils/metrics.py`），不要直接读结果 JSON 里的 `final_hv`
 > （那是单-run 的实例边界口径）。
+>
+> **口径统一约定**：全项目"相对增幅"一律用 **`mean(ΔHV) / mean(基线)`**（比值之比），
+> 不用 `mean(ΔHV / 基线)`（各实例相对增幅的平均）——后者在效应接近 0 时可能与
+> ΔHV 反号，且在大效应上能差 2 个百分点（D1→D2：+14.46% vs +16.47%），
+> 会让图与表、文档之间互相打架。分析脚本、绘图脚本、审计脚本三处已对齐。

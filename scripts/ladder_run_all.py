@@ -82,19 +82,29 @@ def main():
             print(f"{inst}: {n_inst} runs done, total {len(done)}  "
                   f"(attempt {attempt})", flush=True)
             t0 = time.perf_counter()
-            proc = subprocess.run(
-                [sys.executable, SCRIPT, "--instance", inst,
-                 "--seeds", str(args.seeds), "--workers", str(args.workers),
-                 "--out", args.out],
-                cwd=ROOT, env=env, capture_output=True, text=True,
-                encoding="utf-8", errors="replace",
-                timeout=args.per_batch_timeout)
-            tail = (proc.stdout or "").strip().splitlines()[-1:] or [""]
-            print(f"    rc={proc.returncode} {time.perf_counter() - t0:.0f}s  {tail[0]}",
-                  flush=True)
+            # 单批超时是**预期内**的故障模式（Mk10 的 run 明显更慢），
+            # 必须当成「本批无进展」处理并交给下一轮 attempt，
+            # 而不是让 TimeoutExpired 冒泡出去、把整个驱动连同剩余实例一起打断。
+            try:
+                proc = subprocess.run(
+                    [sys.executable, SCRIPT, "--instance", inst,
+                     "--seeds", str(args.seeds), "--workers", str(args.workers),
+                     "--out", args.out],
+                    cwd=ROOT, env=env, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
+                    timeout=args.per_batch_timeout)
+                rc = str(proc.returncode)
+                note = ((proc.stdout or "").strip().splitlines()[-1:] or [""])[0]
+            except subprocess.TimeoutExpired:
+                rc = "TIMEOUT"
+                note = (f"超过 --per_batch_timeout={args.per_batch_timeout}s 被杀，"
+                        "已完成的 run 由实验台落盘，下一轮续跑")
+            print(f"    rc={rc} {time.perf_counter() - t0:.0f}s  {note}", flush=True)
             after = done_set(args.out)
             if sum(1 for i, _, _ in after if i == inst) > n_inst:
                 continue            # 有进展，继续下一轮尝试
+            print(f"    {inst}: 本批无进展（{n_inst} 条未变），"
+                  f"重试 {attempt + 1}/{args.attempts}", flush=True)
             break                   # 无进展，交给下一轮 attempt
         done = done_set(args.out)
         n_after = sum(1 for i, _, _ in done if i == inst)
