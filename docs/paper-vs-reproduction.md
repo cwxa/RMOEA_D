@@ -21,7 +21,7 @@
 | 奖励 = 10 若 ΔDV>0，否则 0；**不加惩罚** | §4.5.4, Eq (18) | `reward_mode="dv"`（默认） | ✅ |
 | **反向 ε-greedy**：`rand<ε` → 取 max Q（利用） | §4.5.5 + Algorithm 3 第 5–8 行 | 已按论文极性修正（曾写反，见诊断文档 §1.3） | ✅ 已修 |
 | α=0.4, γ=0.6, ε=0.8, LP=40 | §5.2 Taguchi DOE 结论 | 同 | ✅ |
-| RVNS：5 个 LS 算子 + SM/FM 记忆 + 轮盘赌 | §4.6, Algorithm 4 | `core/rvns.py` | ✅ |
+| RVNS：5 个 LS 算子 + SM/FM 记忆 + 轮盘赌 | §4.6, Algorithm 4 | `src/rmoea_d/core/rvns.py` | ✅ |
 | RVNS 接受准则 = Tchebycheff `g^te(P'\|λ,Z) < g^te(P\|λ,Z)` | Algorithm 4 第 3 行 | 已按论文修正（曾用 Pareto 支配，且 λ/Z 未使用） | ✅ 已修 |
 | 每解每代 1 次邻域尝试（first-improvement 单步） | Algorithm 4 | `rvns_ls_trials=1` | ✅ |
 | MIX3 初始化（1/3 随机 + 1/3 LS + 1/3 GW） | §4.3 | `core/operators.py::init_mix3` | ✅ |
@@ -36,7 +36,7 @@
    加 Q-PAS，最后一级才把随机选择换成 RVNS。本项目的 `baseline`（`T10`）**完全没有局部搜索**，
    所以 `RVNS only vs baseline` 测的是「加上局部搜索」而不是「RL 引导选算子」。补齐 `RandVNS`
    臂后两者才可分离（见 §3）。
-2. **论文的 D3「随机 VNS」在本项目原先缺失。** 已补：`core/rvns.py` 新增 `mode="random"`
+2. **论文的 D3「随机 VNS」在本项目原先缺失。** 已补：`src/rmoea_d/core/rvns.py` 新增 `mode="random"`
    （五算子等概率随机选，对应论文 §4.6 用法 (1)），即 RMOEA/D3。
 3. **论文的 D1 / D2 在本项目原先无法构造。** `RMOEAD` 把 MIX3 初始化与 Elite archive
    写死在代码里，所以"纯 MOEA/D"（D1）和"+MIX3"（D2）两个中间级根本没有对应的配置。
@@ -314,7 +314,7 @@ python scripts/paper_cmp_plot.py      # -> charts/ablation/paper_vs_reproduction
 `logs/ablation_ladder.json`；论文审计 `logs/_paper_audit.txt`。
 
 > 注：`charts/` 与 `logs/` 均在 `.gitignore` 中，不会入库。
-> HV 用**参考集归一化**（`utils/metrics.py`），不要直接读结果 JSON 里的 `final_hv`
+> HV 用**参考集归一化**（`src/rmoea_d/utils/metrics.py`），不要直接读结果 JSON 里的 `final_hv`
 > （那是单-run 的实例边界口径）。
 >
 > **口径统一约定**：全项目"相对增幅"一律用 **`mean(ΔHV) / mean(基线)`**（比值之比），

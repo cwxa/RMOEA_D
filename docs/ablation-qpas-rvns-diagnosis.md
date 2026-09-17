@@ -38,7 +38,7 @@ lo, hi = front.min(axis=0), front.max(axis=0)   # ← 每条前沿各归一化�
 这会把任意前沿都拉伸到单位盒，指标只反映**前沿形状**，对**整体优劣不敏感**——
 两个质量差异很大的算法会得到几乎相同的 HV。
 
-**修复**（`utils/metrics.py`）：新增 `estimate_hv_bounds()` / `instance_hv_bounds()`，
+**修复**（`src/rmoea_d/utils/metrics.py`）：新增 `estimate_hv_bounds()` / `instance_hv_bounds()`，
 改用**参考集归一化**（reference-set normalization）——以同一实例下所有变体、所有
 run 的前沿并集作为共用归一化盒，参考点 `(1.02, 1.02)`。这是多算法比较 HV 的标准做法。
 同时修正扫掠公式为 `∪[p, ref]` 支配区域并集（原先多算了前沿左侧的空条带）。
@@ -61,7 +61,7 @@ g^te(P'|λ,Z) < g^te(P|λ,Z)
 原实现用的是 Pareto 支配判定，且**传入的 weight / z 参数完全没有被使用**。
 后果：收敛后期接受率塌到 0/100，RVNS 实际失效。
 
-**修复**（`core/rvns.py`）：改用 Tchebycheff 接受准则，复用 `moead.tchebycheff`。
+**修复**（`src/rmoea_d/core/rvns.py`）：改用 Tchebycheff 接受准则，复用 `moead.tchebycheff`。
 
 ### 1.3 Q-PAS 的 ε-greedy 极性写反
 
@@ -75,7 +75,7 @@ else:         随机（探索）
 原实现写成 `rand < ε → 随机`，于是 ε=0.8 的实际含义变成 **80% 随机探索**，
 Q-table 基本学不到东西。
 
-**修复**（`core/qlearning.py`）：按论文极性修正。
+**修复**（`src/rmoea_d/core/qlearning.py`）：按论文极性修正。
 修复后 Q-table 确实出现梯度（`T=5` 偏好，极差 ≈1.99），但见第 3 节——
 **学到的是"错误的" T**。
 
@@ -346,7 +346,7 @@ per-seed oracle（每个 seed 取最优 T）达 **0.86644**，比最优固定 T=
 
 ### 7.3 修复与效果
 
-**修复**（`core/qlearning.py`）：并列最大时默认随机取（`tie_break="random"`）；
+**修复**（`src/rmoea_d/core/qlearning.py`）：并列最大时默认随机取（`tie_break="random"`）；
 新增可选 `q_init="optimistic"` 进一步打破对称；`tie_break="argmax"` 保留以复现旧行为。
 回归测试：`tests/test_refactor.py::TestQlearningTieBreak`。
 RMOEAD 透传参数 `ql_tie_break` / `ql_q_init` / `ql_q_init_scale`。
@@ -410,7 +410,7 @@ RMOEAD 透传参数 `ql_tie_break` / `ql_q_init` / `ql_q_init_scale`。
 
 本项目的消融阶梯缺了这一环——`baseline` (`T10`) **完全没有局部搜索**，因此
 `RVNS only vs baseline` 把两件事混在了一起。补齐论文缺失的 **`RandVNS`** 臂
-（五算子等概率随机选，见 `core/rvns.py` 的 `mode="random"`）后，同强度配对比较：
+（五算子等概率随机选，见 `src/rmoea_d/core/rvns.py` 的 `mode="random"`）后，同强度配对比较：
 
 **Mk10，n=30，参考集归一化（28 臂 / 840 runs）**
 

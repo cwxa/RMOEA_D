@@ -71,10 +71,15 @@ RMOEA_D/
 │   ├── paper_table5_audit.py            # ★ 论文 Table 5 阶梯逐步骤审计 (符号检验 + 排名/效应量对照)
 │   ├── t_leverage_sweep.py              # ★ T 杠杆 / Q-PAS / 局部搜索实验台 (分批·增量·可续跑)
 │   ├── t_leverage_analysis.py           # ★ 上述实验台的分析 (参考集归一化 + 组件分解)
-│   └── qpas_audit.py                    # ★ Q-PAS 逐条审计 (式(13)不动点 / CV 尺度 / Q 表语义 / RNG)
+│   ├── qpas_audit.py                    # ★ Q-PAS 逐条审计 (式(13)不动点 / CV 尺度 / Q 表语义 / RNG)
+│   ├── ablation_ladder.py               # ★ 论文 §5.4 六级阶梯实验台 (8 臂, 增量落盘, 断点续跑)
+│   ├── ablation_ladder_analysis.py      # ★ 阶梯分析 (逐级 HV+Friedman / 相邻级配对 / 2×2 / T 分布)
+│   ├── ladder_run_all.py                # ★ 阶梯分批驱动 (按实例切批, 超时重试)
+│   ├── ladder_plot.py                   # ★ 阶梯 4 面板图 (与文档表格逐位同口径)
+│   └── paper_cmp_plot.py                # ★ 论文对照图 (按种子交集配对)
 │
 ├── tests/                               # 单元测试
-│   └── test_refactor.py                 # 重构验证 + 消融诊断修复的回归锁 (47 cases)
+│   └── test_refactor.py                 # 重构验证 + 消融/阶梯诊断修复的回归锁 (80 cases)
 │
 ├── data/                                # Brandimarte 原始实例 (Mk01~Mk10.fjs)
 ├── test_cases/                          # 固定测试用例 (seed=42)
@@ -107,16 +112,23 @@ RMOEA_D/
 │   │   ├── ablation_tfn_comparison_table.png    # ★ TFN 三线表      (visualization.py)
 │   │   ├── hv_comparison.png
 │   │   ├── mk01/pareto_front_comparison.png     # per-instance, Mk01~Mk10
-│   │   └── ablation_{hv,makespan,runtime}_comparison.png
-│   │       ablation_{cohens_d_matrix,cohens_d_per_instance,pvalue_heatmap,stats_card}.png
-│   │                                            # 统计分析图表       (analysis_report.py)
+│   │   ├── ablation_{hv,makespan,runtime}_comparison.png
+│   │   │   ablation_{cohens_d_matrix,cohens_d_per_instance,pvalue_heatmap,stats_card}.png
+│   │   │                                        # 统计分析图表       (analysis_report.py)
+│   │   ├── paper_ladder_reproduction.png        # ★ 六级阶梯 4 面板  (ladder_plot.py)
+│   │   ├── paper_vs_reproduction.png            # ★ 论文对照 3 面板  (paper_cmp_plot.py)
+│   │   ├── mk10_t_leverage_qpas_fix.png         # T 杠杆 / Q-PAS 修复对照 (t_leverage_analysis.py)
+│   │   └── qpas_implementation_audit.png        # Q-PAS 实现审计 3 面板   (qpas_audit.py)
 │   └── schedules/                       # 甘特图 (--skip_gantt 时不生成)
 │       └── mk01/...
 │
 └── docs/                                # 论文与设计文档
-    ├── ablation-qpas-rvns-diagnosis.md  # 消融诊断：4 个 bug + T 杠杆 + 组件分解
+    ├── ablation-qpas-rvns-diagnosis.md  # ★ 消融诊断：4 个 bug + T 杠杆 + 六级阶梯复现 (§9)
     ├── paper-vs-reproduction.md         # ★ 与论文 (Li et al. 2022) 的逐条对照
-    └── qpas-implementation-audit.md     # ★ Q-PAS 实现审计 (逐条核对 + 6 处论文笔误)
+    ├── qpas-implementation-audit.md     # ★ Q-PAS 实现审计 (逐条核对 + 6 处论文笔误)
+    ├── rmoead-paper.md                  # 论文原文 (Markdown 抽取)
+    ├── rmoead-paper-cn.md               # 论文中文翻译
+    └── superpowers/                     # 设计规格 (specs/) 与实现计划 (plans/)
 ```
 
 ---
@@ -231,6 +243,16 @@ python scripts\t_leverage_analysis.py --lab_json logs\_mk10_lab.json
 # Q-PAS 实现审计：逐条核对论文 Algorithm 3 + 5 项数值验证
 # (式(13) 不动点 / CV 尺度支配 / 状态翻转率 / Q 表语义 / RNG 共享)
 python scripts\qpas_audit.py --instance Mk10 --seed 42
+
+# —— 论文 §5.4 六级消融阶梯（8 臂 × 10 实例 × 30 seeds = 2400 runs）——
+# 分批驱动：按实例切批 + 超时自动重试，配合实验台断点续跑可稳定跑完
+python scripts\ladder_run_all.py --seeds 30 --workers 6
+# 阶梯分析：逐级 HV+Friedman / 相邻级配对检验 / 2×2 因子分解 / T 分布 / 逐实例单调性
+python scripts\ablation_ladder_analysis.py --lab_json logs\ablation_ladder.json
+# 阶梯 4 面板图（与本文档表格逐位同口径）
+python scripts\ladder_plot.py --lab_json logs\ablation_ladder.json
+# 论文对照图（按种子交集配对；默认读 logs\_paper_audit.json + logs\_mk10_lab.json）
+python scripts\paper_cmp_plot.py
 ```
 
 ---
