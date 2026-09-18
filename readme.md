@@ -264,15 +264,21 @@ python scripts\paper_cmp_plot.py
 # 注意：定位热点必须用 profile_wall.py（真实计时）。
 # profile_hotspots.py 的 cProfile 会给每次函数调用插桩，严重高估纯 Python 循环
 # 里小函数的相对成本，据此做批量化改造会**变慢** 8-11%（已实测）。
-python scripts\bench_speedup.py                 # 两棵树各跑墙钟 -> logs\_speedup_{base,new}.json
-python scripts\profile_wall.py                  # 函数级真实计时
-python scripts\dump_run.py --instance Mk10 --seed 7 --gens 60   # 逐位指纹（等价性验证）
+python scripts\bench_speedup.py --label new --out logs\_speedup_new.json   # 在优化后的树上
+python scripts\bench_speedup.py --label base --out logs\_speedup_base.json # 在旧 worktree 里
+python scripts\profile_wall.py --instance Mk10 --max_gen 60   # 函数级真实计时
+python scripts\dump_run.py --instance Mk10 --seed 7 --max_gen 200 --out logs\_fp.json   # 逐位指纹（等价性验证）
+
+# 注意：以上命令均在 2026-09-18 用 --help 实测过参数名（曾把 --max_gen 写成 --gens、
+# 把 bench_speedup 写成无参调用，两条都会直接报错）。改参数名时务必同步这里。
 
 # —— 初始化变体扫描（MIX3 变体族；见 docs\optimization-report.md）——
 python scripts\t_leverage_sweep.py --instance Mk10 --workers 8 ^
     --arms I_rand,I_mix3,I_no_r,I_half_r,I_gw_spt,I_spt,I_mwr ^
     --out logs\_mk10_init.json
 # 留出集确认（预注册：开发集只用于筛选，留出集同号才算成立）
+# ★ 归一化盒只由「参与比较的臂」构造：--labs 里可以混着无关臂，但盒不会含它们。
+#   曾把整份 lab（35 个 Q-PAS/T 臂）并进盒，把 I_rand 的杠杆从 -25.69% 读成 -22.31%。
 python scripts\init_variant_analysis.py --labs logs\_mk10_init.json,logs\_mk10_lab.json
 python scripts\init_variant_analysis.py --holdout ^
     --labs logs\_mk07_init.json,logs\_mk09_init.json
@@ -283,7 +289,7 @@ python scripts\optimization_plots.py            # -> charts\optimization\*.png
 > 默认 `"mix3"` 是**论文口径**（与 `init_mix3` 逐位相同，有等价性锁）。
 > 可选值见 `core/operators.py: INIT_VARIANTS`：`random` / `mix3_spt` / `mix3_mwr` /
 > `mix3_gw_spt` / `half_random` / `no_random`。
-> **注意**：`mix3_mwr`（OS-MWR 派工式初始化）在 Mk10 上 +8.60%\*\*\*，
+> **注意**：`mix3_mwr`（OS-MWR 派工式初始化）在 Mk10 上 +8.64%\*\*\*，
 > 但在 Mk07/Mk09 留出集上只有 +0.3%（n.s.）—— **不是普适改进，默认值不要改**。
 
 ---

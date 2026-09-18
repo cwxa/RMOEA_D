@@ -15,21 +15,31 @@
   Q2 初始化总杠杆：各变体相对纯随机（`I_rand`，= 论文 RMOEA/D1）差多少？
   Q3 净增益：有没有变体显著优于论文口径的 MIX3？
 
-口径（两条硬约束）
+口径（三条硬约束）
 ------------------
 1. **归一化盒逐实例独立**。HV 的归一化盒是"参与比较的前沿并集"的包围盒，
    把不同实例（Mk07 量级 ~150/700，Mk10 量级 ~300/2000）的前沿并成**同一个盒**，
    会让 Mk07 的点被压进盒的左下角、HV 冲到 1.0，而 Mk10 只剩 ~0.1 ——
    这是纯粹的**量纲假象**，会读出"Mk07 上所有变体都近乎完美"这种胡说。
    因此本脚本按 `row["instance"]` 分组，**每组一个盒**。
-2. **结论只用相对差**（dHV / 胜负 / p / dz / rel%），与盒无关，可跨实例比对。
+2. **盒只由「参与比较的臂」构造**（`CONTEXT_ARMS`）。约定原文是
+   "参与比较的所有臂、所有 run 的前沿并集"，所以盒**不能**把 lab 文件里
+   顺带存在的无关臂也并进去。实测：`_mk10_lab.json` 里有 35 个 Q-PAS / T 臂，
+   其中 `QPAS2_opt_hv` 的前沿把 Mk10 的 y 上界从 **2234.0 撑到 2297.25**，
+   于是同一份变体数据被读出完全不同的 HV / rel% / dz
+   （`I_rand` 杠杆 −25.69% → −22.31%）。凡"盒随臂集变化"，
+   绝对 HV 与 rel% **都不能跨批次比**，所以宁可把臂集钉死。
+3. **结论只用相对差**（dHV / 胜负 / p / dz / rel%），与盒无关，可跨实例比对。
 
-修正的两个缺陷（2026-09-17）
-----------------------------
-* 缺陷 A：`load_hv` 把所有 lab 摊平成一个 `{(label, seed): hv}` 字典，
+修正的三个缺陷
+--------------
+* 缺陷 A（2026-09-17）：`load_hv` 把所有 lab 摊平成一个 `{(label, seed): hv}` 字典，
   跨实例时**同 (label, seed) 互相覆盖** → 留出集分析输出全是垃圾。
-* 缺陷 B：实例标签用 `basename.replace("_init.json","")` 得到 `_mk07`，
+* 缺陷 B（2026-09-17）：实例标签用 `basename.replace("_init.json","")` 得到 `_mk07`，
   而查表键写的是 `mk07`（无下划线）→ 方向一致性表**永远为空**（静默）。
+* 缺陷 C（2026-09-18）：盒按"该实例在 `--labs` 里的**全部行**"构造，
+  于是被无关臂撑大（见口径 2）。修法：盒只用 `CONTEXT_ARMS` 的行；
+  被排除的臂会在表头**显式列出**（不再静默）。
 
 用法
 ----
@@ -72,6 +82,11 @@ LABEL = {
 PAPER = "I_mix3"
 RANDOM_BASE = "I_rand"
 
+# 「参与比较的臂」——归一化盒**只**由这些臂的前沿并集决定（口径 2）。
+# 加 RVNSonly 是零成本的：它与 I_mix3 逐位相同（Q1 就是验这个），
+# 前沿集合不变 → 盒不变，但 Q1 的对照也就落在同一个盒里了。
+CONTEXT_ARMS = VARIANTS + ["RVNSonly"]
+
 L = []
 
 
@@ -86,8 +101,28 @@ def stars(p):
     return "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "n.s."
 
 
+def split_context(rows, keep=None):
+    """把行分成「参与比较」与「无关臂」两部分（口径 2）。
+
+    无关臂**不进归一化盒**，但也不丢——调用方负责把它们显式报出来，
+    避免"少算了什么"这件事再次静默。
+    """
+    keep = set(CONTEXT_ARMS if keep is None else keep)
+    kept, dropped = [], collections.Counter()
+    for r in rows:
+        if r.get("label") in keep:
+            kept.append(r)
+        else:
+            dropped[r.get("label")] += 1
+    return kept, dropped
+
+
 def hv_table(rows):
-    """单个实例内的行 -> ({label: {seed: hv}}, box)。盒由本实例前沿并集决定。"""
+    """单个实例内的行 -> ({label: {seed: hv}}, box)。
+
+    盒由**传入行**的前沿并集决定 —— 所以调用方必须先 `split_context()`，
+    否则无关臂会撑大盒（口径 2）。
+    """
     fronts = [np.asarray(r["final_pf"], float) for r in rows if r.get("final_pf")]
     lo, hi = estimate_hv_bounds(fronts)
     hv = collections.defaultdict(dict)
@@ -243,20 +278,44 @@ def main():
     ap.add_argument("--labs", required=True, help="逗号分隔的 lab JSON")
     ap.add_argument("--holdout", action="store_true",
                     help="留出集模式：额外给出实例间方向一致性")
+    ap.add_argument("--arms", default=None,
+                    help="参与比较的臂（逗号分隔）；归一化盒只由这些臂构造。"
+                         "默认 = %s" % ",".join(CONTEXT_ARMS))
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     labs = [p.strip() for p in args.labs.split(",") if p.strip()]
-    per, rows = load_by_instance(labs)
+    keep = [a.strip() for a in args.arms.split(",")] if args.arms else list(CONTEXT_ARMS)
+    keep = [a for a in keep if a]
+    per_all, rows = load_by_instance(labs)
+
+    # 口径 2：盒只由「参与比较的臂」构造。无关臂显式列出，不静默丢弃。
+    per = collections.OrderedDict()
+    dropped = collections.Counter()
+    n_kept = 0
+    for inst, rr in per_all.items():
+        k, d = split_context(rr, keep)
+        per[inst] = k
+        n_kept += len(k)
+        dropped.update(d)
     tags = list(per.keys())
 
     W("=" * 78)
     W("初始化变体扫描分析%s" % ("（留出集）" if args.holdout else "（开发集）"))
     W("=" * 78)
     W("lab 文件        : %s" % ", ".join(labs))
-    W("总 run 数       : %d" % len(rows))
+    W("读入 run 数     : %d" % len(rows))
+    W("参与比较的 run  : %d  （臂: %s）" % (n_kept, ", ".join(keep)))
+    if dropped:
+        W("已排除的无关臂  : %d 个 / %d runs —— **其前沿不进归一化盒**（口径 2）"
+          % (len(dropped), sum(dropped.values())))
+        W("                  %s" % ", ".join(
+            "%s×%d" % (k, v) for k, v in sorted(dropped.items())[:12]))
+        if len(dropped) > 12:
+            W("                  ...（共 %d 个臂）" % len(dropped))
     W("实例            : %s" % ", ".join(tags))
     W("★ 归一化盒**逐实例独立**（跨实例合并会把 HV 变成量纲假象，见脚本 docstring）。")
+    W("★ 归一化盒只由上述「参与比较的臂」构造 —— 无关臂会撑大盒并污染 rel% / dz。")
     W("★ 全部结论只用相对差（与盒无关）。")
     W()
 

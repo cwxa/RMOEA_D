@@ -1859,6 +1859,134 @@ class TestInitVariantAnalysisGrouping(unittest.TestCase):
         self.assertAlmostEqual(lo7[0], 150.0, delta=2.0)
         self.assertAlmostEqual(lo10[1], 1894.0, delta=2.0)
 
+    def test_out_of_context_arms_do_not_touch_the_box(self):
+        """缺陷 C：**不参与比较的臂不得进归一化盒**（2026-09-18 实测）。
+
+        原型：`_mk10_lab.json` 里顺带存着 34 个 Q-PAS / T 臂，其中
+        `QPAS2_opt_hv`(seed 43) 的前沿把 Mk10 的 y 上界从 2234.0 撑到 2297.25，
+        于是同一份变体数据被读出**另一套** rel% / dz：
+        `I_rand` 的初始化杠杆 −25.69% 被读成 −22.31%。
+
+        这里用一个"极端无关臂"（前沿整体 +900）复现同一机制：它必须被排除，
+        且盒与全部 HV 值**逐元素不变**。
+        """
+        m = self._import()
+        ctx = (self._mk_rows("Mk10", 300, 1900, "I_mix3")
+               + self._mk_rows("Mk10", 300, 1900, "I_mwr"))
+        outsider = self._mk_rows("Mk10", 300, 1900, "QPAS2_opt_hv")
+        for r in outsider:                       # 模拟离群臂把盒撑大
+            r["final_pf"] = [[p[0], p[1] + 900.0] for p in r["final_pf"]]
+
+        hv_ctx, box_ctx = m.hv_table(ctx)
+        kept, dropped = m.split_context(ctx + outsider, m.CONTEXT_ARMS)
+        hv_kept, box_kept = m.hv_table(kept)
+
+        self.assertEqual(list(dropped), ["QPAS2_opt_hv"],
+                         "无关臂必须被识别出来（而不是静默丢弃）")
+        self.assertEqual(dropped["QPAS2_opt_hv"], 5)
+        self.assertTrue(np.array_equal(box_ctx[0], box_kept[0]))
+        self.assertTrue(np.array_equal(box_ctx[1], box_kept[1]),
+                        "无关臂不得影响归一化盒")
+        for lab in hv_ctx:
+            for s in hv_ctx[lab]:
+                self.assertEqual(hv_ctx[lab][s], hv_kept[lab][s],
+                                 "同一份数据在两种臂集下必须给出同一个 HV")
+
+        # 反证：真把无关臂并进盒，值就变了 —— 说明这个测试有区分度
+        _, box_bad = m.hv_table(ctx + outsider)
+        self.assertGreater(box_bad[1][1], box_ctx[1][1],
+                           "并进盒本该把 y 上界抬高（这就是被污染的机制）")
+
+    def test_context_arm_set_is_explicit(self):
+        """参与比较的臂集必须是显式常量，且不含常见的高污染源。"""
+        m = self._import()
+        self.assertTrue(set(m.VARIANTS).issubset(set(m.CONTEXT_ARMS)),
+                        "全部变体臂都必须在参与比较的臂集里")
+        self.assertIn("RVNSonly", m.CONTEXT_ARMS,
+                      "Q1 的对照臂 RVNSonly 也要在集内（它与 I_mix3 逐位相同，不改变盒）")
+        for bad in ("QPAS2_opt_hv", "QPAS2_hv_wide", "RVNSonly_Brand", "T100", "Full"):
+            self.assertNotIn(bad, m.CONTEXT_ARMS,
+                             "%s 不参与变体比较，不得进盒" % bad)
+
+        # split_context 默认口径 = CONTEXT_ARMS，无关臂要被报出来
+        rows = (self._mk_rows("Mk10", 300, 1900, "I_mwr")
+                + self._mk_rows("Mk10", 300, 1900, "T100"))
+        kept, dropped = m.split_context(rows)
+        self.assertEqual({r["label"] for r in kept}, {"I_mwr"})
+        self.assertEqual(dict(dropped), {"T100": 5})
+
+    @staticmethod
+    def _run_main(m, labs):
+        """按 CLI 口径跑一次 `main()`，返回它打印的全部文本。"""
+        import contextlib
+        import io as _io
+        m.L.clear()
+        buf = _io.StringIO()
+        old = sys.argv
+        sys.argv = ["init_variant_analysis.py", "--labs", labs]
+        try:
+            with contextlib.redirect_stdout(buf):
+                m.main()
+        finally:
+            sys.argv = old
+        return buf.getvalue()
+
+    def test_cli_actually_excludes_out_of_context_arms(self):
+        """端到端：**`main()` 必须真的用上排除逻辑**，而不只是 helper 正确。
+
+        只验 helper 是不够的 —— 缺陷 18 的形态正是"helper 写了一版、
+        调用方没接上"。所以这里直接跑 CLI，断言：
+        (a) 混入离群无关臂后，归一化盒**一字不变**；
+        (b) 该臂被显式报出来（"已排除的无关臂"），不是静默丢弃。
+        """
+        import json
+        import re
+        import tempfile
+        m = self._import()
+        rows = (self._mk_rows("Mk10", 300, 1900, "I_mix3")
+                + self._mk_rows("Mk10", 300, 1900, "I_mwr"))
+        # 让 I_mwr 与 I_mix3 有可测差异，否则 rel% 恒为 0（断言会变成平凡真）。
+        # 实测：臂集放开时同一条 rel% 会从 +57.80% 被读成 +16.61% ——
+        # 与真实案例（−25.69% 读成 −22.31%）是同一个机制。
+        for r in rows:
+            if r["label"] == "I_mwr":
+                r["final_pf"] = [[p[0] - 2.0, p[1] - 3.0] for p in r["final_pf"]]
+        bad = self._mk_rows("Mk10", 300, 1900, "QPAS2_opt_hv")
+        for r in bad:
+            r["final_pf"] = [[p[0], p[1] + 900.0] for p in r["final_pf"]]
+
+        paths = []
+        for payload in (rows, rows + bad):
+            with tempfile.NamedTemporaryFile("w", suffix="_mk10_x.json",
+                                             delete=False, encoding="utf-8") as fh:
+                json.dump(payload, fh)
+                paths.append(fh.name)
+        try:
+            out_clean = self._run_main(m, paths[0])
+            out_dirty = self._run_main(m, paths[1])
+        finally:
+            for p in paths:
+                os.remove(p)
+
+        pat = re.compile(r"归一化盒\(本实例独立\) (.*)")
+        box_clean = pat.search(out_clean)
+        box_dirty = pat.search(out_dirty)
+        self.assertIsNotNone(box_clean)
+        self.assertIsNotNone(box_dirty)
+        self.assertEqual(box_clean.group(1), box_dirty.group(1),
+                         "无关臂不得改变报告里的归一化盒")
+        self.assertIn("已排除的无关臂", out_dirty,
+                      "被排除的臂必须显式报出来")
+        self.assertIn("QPAS2_opt_hv", out_dirty)
+        self.assertNotIn("已排除的无关臂", out_clean,
+                         "没有无关臂时不该出现该行")
+        # 报告的 rel% 必须也一致（盒一致 -> HV 一致 -> 效应量一致）
+        rel_pat = re.compile(r"^\s*I_mwr\s+.*?([+-]\d+\.\d+)%", re.M)
+        self.assertEqual(
+            [g for g in rel_pat.findall(out_clean)],
+            [g for g in rel_pat.findall(out_dirty)],
+            "无关臂不得改变 I_mwr 的 rel%（缺陷 18 的原始症状）")
+
 
 if __name__ == "__main__":
     unittest.main()

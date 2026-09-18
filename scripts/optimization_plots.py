@@ -24,6 +24,7 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -32,6 +33,9 @@ from matplotlib import rcParams
 
 from rmoea_d.utils import plot_helpers as ph
 from rmoea_d.utils.metrics import compute_hv, estimate_hv_bounds
+
+# 归一化盒口径的唯一真源（缺陷 18）：参与比较的臂集。
+from init_variant_analysis import CONTEXT_ARMS  # noqa: E402
 
 # 中文优先的字体链（本机 Microsoft YaHei / SimHei 均可用）
 rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "SimSun",
@@ -80,13 +84,23 @@ def _load_json(rel):
         return json.load(f)
 
 
-def _hv_table(labs):
-    """把多个 lab 合并，用共享盒算 HV。返回 {arm: {seed: hv}}。"""
+def _hv_table(labs, only=None):
+    """把多个 lab（同一实例）合并，用共享盒算 HV。返回 {arm: {seed: hv}}。
+
+    `only` = **参与比较的臂集**，归一化盒**只**由这些臂的前沿构造。
+    这是硬约束（缺陷 18）：多并进一个离群臂就能把盒撑大，于是 rel% / dz 全部偏移 ——
+    Mk10 上 `I_rand` 的初始化杠杆 −25.69% 曾被读成 −22.31%、`I_mwr` 的
+    +8.64% 曾被读成 +8.60%。所以**换一批臂做比较时必须显式传 `only`**，
+    不要图省事用默认值。
+    """
     rows = []
     for p in labs:
         d = _load_json(p)
         if d:
             rows.extend(d)
+    if only is not None:
+        keep = set(only)
+        rows = [r for r in rows if r.get("label") in keep]
     if not rows:
         return None
     fronts = [np.asarray(r["final_pf"], float) for r in rows if r.get("final_pf")]
@@ -220,7 +234,8 @@ def fig1_speedup():
 # ══════════════════════════ 02 初始化变体（Mk10） ══════════════════════════
 
 def fig2_init_variants():
-    hv = _hv_table(["logs/_mk10_init.json", "logs/_mk10_lab.json"])
+    hv = _hv_table(["logs/_mk10_init.json", "logs/_mk10_lab.json"],
+                   only=CONTEXT_ARMS)
     if not hv:
         print("[skip] 02_init_variants: 缺 Mk10 数据")
         return
@@ -288,7 +303,7 @@ def fig2_init_variants():
     ph.style_ax(ax)
 
     fig.suptitle("初始化变体扫描（Mk10 开发集）：MIX3 的三条分支从未动过 OS 维度；"
-                 "OS-MWR 在此集上 +8.60%***，但留出集判负（见 03）",
+                 "OS-MWR 在此集上 +8.64%***，但留出集判负（见 03）",
                  fontsize=12.5, fontweight="bold", y=1.03)
     ph.source_footer(fig, "logs/_mk10_init.json + _mk10_lab.json")
     _save(fig, "02_init_variants.png")
@@ -303,7 +318,8 @@ def fig3_holdout_forest():
             ("Mk09 (留出)", ["logs/_mk09_init.json"])]
     tables = {}
     for tag, labs in sets:
-        t = _hv_table(labs)
+        # 每个实例一个盒（跨实例合并会造出量纲假象），且盒只由参与比较的臂构造
+        t = _hv_table(labs, only=CONTEXT_ARMS)
         if t:
             tables[tag] = t
     if len(tables) < 2:
@@ -345,7 +361,7 @@ def fig3_holdout_forest():
     ax.set_yticklabels([VARIANT_LABEL[a] for a in arms], fontsize=9.5)
     ax.set_xlabel("相对 MIX3 的 HV 变化 (%)   [点=均值, 线=95%CI]")
     ax.set_title("留出集确认：符号跨实例一致，但幅度塌陷 → 不构成普适改进\n"
-                 "OS-MWR：Mk10 +8.60%*** → Mk07 +0.34% n.s. → Mk09 +0.30% n.s."
+                 "OS-MWR：Mk10 +8.64%*** → Mk07 +0.34% n.s. → Mk09 +0.30% n.s."
                  "（方向 3/3 同号，幅度差 25×；增益是 Mk10 特有的）", fontsize=11.5)
     ax.legend(framealpha=0.9, loc="lower right")
     ax.invert_yaxis()
@@ -374,7 +390,7 @@ def fig4_wallclock_hv():
 
     FAMILY = ["RVNSonly", "RVNSonly_G290", "RVNSonly_t3",
               "RandVNS_G440", "RVNSonly_G440", "RVNSonly_G586"]
-    hv = _hv_table(["logs/_mk10_merged_eqc.json"])
+    hv = _hv_table(["logs/_mk10_merged_eqc.json"], only=FAMILY)
     agg = {}
     for r in rows:
         if r["label"] not in FAMILY:
@@ -484,20 +500,63 @@ def fig5_pareto_fronts():
 
 # ══════════════════════════ 06 杠杆总览 ══════════════════════════
 
+def _scrape_rel(report, section, arm, mean=False):
+    """从分析报告的 Q2/Q3 段里现场抓某个臂的 rel%（而不是在图里写死）。
+
+    为什么不在图里硬编码数字：本轮就是被"报告改了、图没改"咬过一次 ——
+    归一化盒修正后 rel% 从 +8.60% 变成 +8.64%，写死的数字会悄悄停在旧值上。
+    抓不到就打印警告，让图上的缺口暴露出来，而不是展示一个过期的数。
+    """
+    p = report if os.path.isabs(report) else os.path.join(ROOT, report)
+    if not os.path.exists(p):
+        print("[skip] %s 不存在，无法抓 %s/%s" % (report, section, arm))
+        return None
+    txt = open(p, encoding="utf-8").read()
+    i = txt.find(section)
+    if i < 0:
+        print("[skip] %s 里找不到 %s" % (report, section))
+        return None
+    for line in txt[i:].splitlines()[1:]:
+        s = line.strip()
+        if not s:
+            continue
+        if set(s) <= set("= -"):      # 分隔线（section 头后紧跟一条，不能当成"下一段"）
+            continue
+        if s.startswith("["):         # 真的到了下一个 section 头
+            break
+        if arm in line:
+            vals = re.findall(r"([+-]\d+\.\d+)%", line)
+            if vals:
+                f = [float(v) for v in vals]
+                return float(np.mean(f)) if mean else f[-1]
+    print("[skip] %s 的 %s 段里没找到 %s" % (report, section, arm))
+    return None
+
+
 def fig6_lever_summary():
     """本轮（含之前几轮）所有杠杆的效应量排序。
 
-    数据来源逐条列在下方注释里；这里只做展示，不做新的统计。
+    凡是能从分析报告里抓的，一律现场抓（见 `_scrape_rel` 的说明）；
+    抓不到的（来自别的实验台的）保留常量，但右列写明来源文件。
     """
+    dev = "logs/_init_variant_report.txt"
+    hold = "logs/_init_holdout_mk07mk09.txt"
+    r_mix3 = _scrape_rel(dev, "[Q2]", "I_mix3")          # MIX3 vs 纯随机
+    r_mwr = _scrape_rel(dev, "[Q3]", "I_mwr")            # OS-MWR vs MIX3
+    r_mwr_hold = _scrape_rel(hold, "[留出集判据]", "I_mwr", mean=True)
+    print("[fig6] MIX3 vs 随机 = %s | OS-MWR(Mk10) = %s | OS-MWR(留出集均值) = %s"
+          % (r_mix3, r_mwr, r_mwr_hold))
+
     items = [
-        ("初始化 MIX3\n(vs 纯随机)", 28.71, "算力 1.00×", "logs/_init_variant_report.txt"),
-        ("初始化 OS-MWR\nMk10 (G200 / G440)", 8.60, "算力 1.00× / 2.2×", "logs/_init_variant_report.txt"),
+        ("初始化 MIX3\n(vs 纯随机)", r_mix3, "算力 1.00×", dev),
+        ("初始化 OS-MWR\nMk10 (G200 / G440)", r_mwr, "算力 1.00× / 2.2×", dev),
         ("邻域尝试 1→3\n(算力不匹配)", 4.68, "算力 2.22×", "docs/qpas-optimization-plan.md"),
-        ("初始化 OS-MWR\nMk07/Mk09 留出集", 0.32, "算力 1.00× · n.s.", "logs/_init_holdout_mk07mk09.txt"),
+        ("初始化 OS-MWR\nMk07/Mk09 留出集", r_mwr_hold, "算力 1.00× · n.s.", hold),
         ("邻域尝试 1→3\n(等算力，已归零)", 0.00, "算力 1.03×", "logs/_eqc_compare.txt"),
         ("RL 选 T (Q-PAS)\n(vs 最优固定 T)", 0.00, "算力 1.00×", "logs/_phase_oracle.txt"),
         ("预算分配 ABA\n(等算力)", -0.64, "算力 1.00×", "logs/_aba_holdout.txt"),
     ]
+    items = [it for it in items if it[1] is not None]
     items.sort(key=lambda r: r[1])
     fig, ax = plt.subplots(figsize=(12.5, 5.8))
     y = np.arange(len(items))
@@ -511,9 +570,10 @@ def fig6_lever_summary():
     ax.set_yticks(y)
     ax.set_yticklabels([r[0] for r in items], fontsize=9)
     ax.set_xlabel("HV 变化 (%)")
-    ax.set_xlim(-6, 38)
+    ax.set_xlim(min(vals) - 6, max(vals) + 6)
     ax.set_title("本轮全部杠杆一览：初始化是唯一有空间的维度，但增益不可跨实例复现\n"
-                 "（OS-MWR 在 Mk10 上 +8.60%***，到留出集只剩 +0.3% n.s.）")
+                 "（OS-MWR 在 Mk10 上 +%.2f%%***，到留出集只剩 %+.2f%% n.s.）"
+                 % (r_mwr, r_mwr_hold))
     ph.style_ax(ax)
     ph.source_footer(fig, "各条来源见右侧标注文件")
     _save(fig, "06_lever_summary.png")
