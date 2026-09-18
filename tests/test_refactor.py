@@ -1988,5 +1988,428 @@ class TestInitVariantAnalysisGrouping(unittest.TestCase):
             "无关臂不得改变 I_mwr 的 rel%（缺陷 18 的原始症状）")
 
 
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_SCRIPTS = os.path.join(_ROOT, "scripts")
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+_DATA = os.path.join(_ROOT, "data")
+
+
+class TestHVCaliberDivergence(unittest.TestCase):
+    """缺陷 22 回归锁：两套 HV 口径的性质差异必须可复现。
+
+    本轮最重要的口径纠正。若有人"顺手"把 `instance_hv_bounds` 换成
+    `estimate_hv_bounds`，本研究所有效应量会突然放大约一个数量级，
+    所以把两条性质钉死：
+      (a) `estimate_hv_bounds` 的边界**严格等于输入前沿的极值** → 随臂集变化；
+      (b) `instance_hv_bounds` 只依赖实例数据 → 与臂集无关。
+    """
+
+    def test_estimate_hv_bounds_equals_front_extremes(self):
+        a = np.array([[10.0, 100.0], [20.0, 90.0]])
+        b = np.array([[12.0, 95.0]])
+        lo, hi = estimate_hv_bounds([a, b])
+        self.assertTrue(np.allclose(lo, np.vstack([a, b]).min(axis=0)))
+        self.assertTrue(np.allclose(hi, np.vstack([a, b]).max(axis=0)))
+
+    def test_box_changes_when_arm_set_changes(self):
+        """加入一个离群臂 → 盒必须变。这就是缺陷 14/18/22 的机制。"""
+        a = np.array([[10.0, 100.0], [20.0, 90.0]])
+        b = np.array([[12.0, 95.0]])
+        lo1, hi1 = estimate_hv_bounds([a, b])
+        lo2, hi2 = estimate_hv_bounds([a, b, np.array([[5.0, 200.0]])])
+        self.assertFalse(np.allclose(lo1, lo2),
+                         "盒没随臂集变化，说明这条锁失去区分度")
+        self.assertFalse(np.allclose(hi1, hi2))
+
+    def test_instance_hv_bounds_is_arm_set_invariant(self):
+        """同一实例、两次独立加载 → 边界逐位相同（与任何臂集无关）。"""
+        i1 = load_instance("Mk01", data_dir=_DATA)
+        i2 = load_instance("Mk01", data_dir=_DATA)
+        lo1, hi1 = instance_hv_bounds(i1)
+        lo2, hi2 = instance_hv_bounds(i2)
+        self.assertTrue(np.array_equal(lo1, lo2))
+        self.assertTrue(np.array_equal(hi1, hi2))
+        self.assertTrue(np.all(lo1 < hi1))
+
+    def test_box_caliber_inflates_relative_gain(self):
+        """同一份绝对改进：盒口径的 rel% 必须大于宽松固定边界下的 rel%。"""
+        base = np.array([[300.0, 1900.0], [320.0, 1850.0], [340.0, 1810.0]])
+        better = np.array([[295.0, 1900.0], [315.0, 1850.0], [335.0, 1810.0]])
+        ref = (1.02, 1.02)
+        lo_b, hi_b = estimate_hv_bounds([base, better])
+        h1 = compute_hv(base, ref_point=ref, norm_bounds=(lo_b, hi_b))
+        h2 = compute_hv(better, ref_point=ref, norm_bounds=(lo_b, hi_b))
+        rel_box = (h2 - h1) / h1
+        # 宽松固定边界 ≈ instance_hv_bounds 用的是"理论下界 … 理论上界"
+        lo_w = np.array([0.0, 0.0])
+        hi_w = np.array([1000.0, 4000.0])
+        g1 = compute_hv(base, ref_point=ref, norm_bounds=(lo_w, hi_w))
+        g2 = compute_hv(better, ref_point=ref, norm_bounds=(lo_w, hi_w))
+        rel_wide = (g2 - g1) / g1
+        self.assertGreater(rel_box, rel_wide,
+                           "盒口径应放大相对增幅（缺陷 22 的核心症状）")
+
+
+class TestAnytimeRunWallclock(unittest.TestCase):
+    """缺陷 20 回归锁：长程实验台必须落盘**累计墙钟**。
+
+    `RMOEAD.history[i]["time"]` 一直有，但从未被导出，导致「等墙钟」比较做不了。
+    """
+
+    def test_records_monotone_wallclock(self):
+        import anytime_run
+        job = ("Mk01", "D1", 42, 20, 6, _DATA)
+        r = anytime_run._run_one(job)
+        self.assertEqual(len(r["hist_time"]), r["max_gen"])
+        self.assertEqual(len(r["hist_hv"]), r["max_gen"])
+        t = np.asarray(r["hist_time"], dtype=float)
+        self.assertTrue(np.all(np.diff(t) > 0),
+                        "累计墙钟必须严格递增（否则插值无意义）")
+        # 累计到末代的时间 + 初始化开销，不得超过总墙钟
+        self.assertLessEqual(t[-1] + r["init_time"], r["total_time"] + 1e-6)
+
+    def test_run_is_deterministic(self):
+        import anytime_run
+        job = ("Mk01", "D1", 42, 20, 6, _DATA)
+        a = anytime_run._run_one(job)
+        b = anytime_run._run_one(job)
+        self.assertEqual(a["hist_hv"], b["hist_hv"])
+        self.assertEqual(a["final_hv"], b["final_hv"])
+
+
+class TestPerInstanceWallclockTmax(unittest.TestCase):
+    """缺陷 23 回归锁：等墙钟公共上限必须**逐实例**求，不得取全局最小。
+
+    取全局最小会让大实例（Mk10，数百秒）只在自身预算的前十几个百分点处
+    被比较，把「等墙钟」降级成「等一个很小的墙钟」—— 与 §1.1「逐实例独立」
+    原则冲突，是缺陷 22 的同一家族（跨实例共用一个标量边界）。
+    """
+
+    @staticmethod
+    def _rows():
+        h = [0.1, 0.2, 0.3]
+        return [
+            {"instance": "Mk07", "label": "D1", "seed": 42,
+             "hist_hv": h, "hist_time": [5.0, 10.0, 15.0], "init_time": 1.0},
+            {"instance": "Mk10", "label": "D1", "seed": 42,
+             "hist_hv": h, "hist_time": [40.0, 90.0, 140.0], "init_time": 3.0},
+            {"instance": "Mk10", "label": "D5", "seed": 42,
+             "hist_hv": h, "hist_time": [70.0, 160.0, 250.0], "init_time": 3.0},
+        ]
+
+    def test_tmax_is_per_instance(self):
+        import response_surface as rs
+        tmax = rs.per_instance_tmax(rs.index_curves(self._rows()))
+        self.assertAlmostEqual(tmax["Mk07"], 16.0)    # 15 + init 1
+        self.assertAlmostEqual(tmax["Mk10"], 143.0)   # 取 D1（140+3），不是 D5（253）
+        self.assertNotAlmostEqual(
+            tmax["Mk07"], tmax["Mk10"],
+            msg="退化成全局最小 → 两实例拿到同一个上限，这条锁失去区分度")
+
+    def test_tmax_empty_index(self):
+        import response_surface as rs
+        self.assertEqual(rs.per_instance_tmax({}), {})
+
+    def test_load_many_prefers_longer_trajectory(self):
+        """多份 lab 合并时必须取**更长**的轨迹，且结果与文件顺序无关。
+
+        用途：把 G=2000 与 G=4000 两次长跑拼起来算"多给一倍算力会怎样"。
+        若实现成"后写覆盖"，换个命令行顺序就会出两套数字。
+        """
+        import json
+        import tempfile
+        import response_surface as rs
+        short = [{"instance": "Mk07", "label": "D1", "seed": 42,
+                  "hist_hv": [0.1], "hist_time": [1.0]}]
+        longer = [{"instance": "Mk07", "label": "D1", "seed": 42,
+                   "hist_hv": [0.1, 0.2, 0.3], "hist_time": [1.0, 2.0, 3.0]}]
+        with tempfile.TemporaryDirectory() as td:
+            a = os.path.join(td, "a.json")
+            b = os.path.join(td, "b.json")
+            with open(a, "w", encoding="utf-8") as fh:
+                json.dump(short, fh)
+            with open(b, "w", encoding="utf-8") as fh:
+                json.dump(longer, fh)
+            for spec in (a + "," + b, b + "," + a):
+                got = rs.load_many(spec)
+                self.assertEqual(len(got), 1)
+                self.assertEqual(len(got[0]["hist_hv"]), 3,
+                                 "必须取更长的那条，且与顺序无关")
+
+    def test_main_runs_end_to_end(self):
+        """端到端：确认 main() 真把 helper 接上了（缺陷 18 的教训——
+        helper 写了但调用方没接，是历史上最容易漏的一类）。"""
+        import json
+        import tempfile
+        import contextlib
+        import io
+        import unittest.mock
+        import response_surface as rs
+        with tempfile.TemporaryDirectory() as td:
+            rows_path = os.path.join(td, "mini.json")
+            out_path = os.path.join(td, "mini.surface.json")
+            with open(rows_path, "w", encoding="utf-8") as fh:
+                json.dump(self._rows(), fh)
+            argv = ["response_surface.py", "--labs", rows_path,
+                    "--pairs", "D5=D1", "--out", out_path]
+            with unittest.mock.patch.object(sys, "argv", argv):
+                with contextlib.redirect_stdout(io.StringIO()) as buf:
+                    rc = rs.main()
+            self.assertEqual(rc, 0)
+            self.assertTrue(os.path.exists(out_path))
+            with open(out_path, encoding="utf-8") as fh:
+                got = json.load(fh)
+            rec = got["wall"]["D5|D1"]["Mk10"]
+            self.assertTrue(all(r["tmax"] == 143.0 for r in rec),
+                            "写出的 tmax 必须是逐实例值，不是全局最小")
+            self.assertIn("Mk07=16.0s", buf.getvalue())
+
+
+class TestFEMultiplier(unittest.TestCase):
+    """等求值次数（FE）口径的承重假设锁。
+
+    「等算力」结论全部建立在"RVNS 臂每代求值 2×"这一条上。若有人改掉
+    `rvns_ls_trials` 默认值、或让 `plan_generation` 在 fixed 模式下不再发满档，
+    §3.3 的结论会**静默失效** —— 所以这条必须单独钉死。
+    """
+
+    def test_fe_multiplier_matches_arm_definition(self):
+        import response_surface as rs
+        self.assertEqual(rs.fe_multiplier("D1"), 1.0, "纯 MOEA/D 无局部搜索")
+        self.assertEqual(rs.fe_multiplier("D2"), 1.0, "D2 只加初始化，不加求值")
+        self.assertEqual(rs.fe_multiplier("D5"), 2.0)
+        self.assertEqual(rs.fe_multiplier("RMOEAD"), 2.0)
+        # 未登记的臂名保守按 1× 处理，不得抛异常
+        self.assertEqual(rs.fe_multiplier("__no_such_arm__"), 1.0)
+
+    def test_fixed_budget_gives_every_solution_full_trials(self):
+        """端到端：`budget_mode="fixed"` 时每个解都拿到满档 ls_trials。"""
+        from rmoea_d.core.rvns import RVNS
+        r = RVNS(n_operators=5, ls_trials=1, budget_mode="fixed")
+        plan = r.plan_generation(20, np.random.RandomState(0))
+        self.assertTrue(np.array_equal(np.asarray(plan), np.ones(20, dtype=int)))
+
+    def test_fe_section_reports_two_times_budget(self):
+        """等 FE 一节必须把 RVNS 臂的公共上限算成 2× 非 RVNS 臂。"""
+        import json
+        import tempfile
+        import contextlib
+        import io
+        import unittest.mock
+        import response_surface as rs
+        rows = [
+            {"instance": "Mk07", "label": "D2", "seed": 42, "n_pop": 100,
+             "hist_hv": [0.1, 0.2, 0.3, 0.4], "hist_time": [1.0, 2.0, 3.0, 4.0],
+             "init_time": 0.0},
+            {"instance": "Mk07", "label": "D5", "seed": 42, "n_pop": 100,
+             "hist_hv": [0.1, 0.2, 0.3, 0.4], "hist_time": [2.0, 4.0, 6.0, 8.0],
+             "init_time": 0.0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "m.json")
+            o = os.path.join(td, "m.out.json")
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump(rows, fh)
+            argv = ["response_surface.py", "--labs", p, "--pairs", "D5=D2",
+                    "--segments", "2", "--out", o]
+            with unittest.mock.patch.object(sys, "argv", argv):
+                with contextlib.redirect_stdout(io.StringIO()) as buf:
+                    self.assertEqual(rs.main(), 0)
+            txt = buf.getvalue()
+            self.assertIn("D2=100", txt)
+            self.assertIn("D5=200", txt)
+            with open(o, encoding="utf-8") as fh:
+                got = json.load(fh)
+            self.assertIn("D5|D2", got["fe"])
+            rec = got["fe"]["D5|D2"]["Mk07"]
+            self.assertEqual(len(rec), 5, "网格点数应等于 --wall_fracs 的项数")
+            self.assertAlmostEqual(rec[-1]["FE"], 400.0)   # min(4*100, 4*200) = 400
+
+
+class TestSurfaceMarkdown(unittest.TestCase):
+    """`scripts/surface_markdown.py` 的回归锁。
+
+    这个脚本存在的理由是"报告里的数字不许手抄"（fig6 曾硬编码 8.60/28.71，
+    报告改了图没改）。它一旦算错，错的会**直接被抄进报告**，所以要把三类
+    最容易悄悄出错的映射钉死：
+
+    1. 代数 → 数组下标是 `hist_hv[g-1]`（off-by-one，差一位 = 全表系统性偏移）；
+    2. 轨迹比网格短的 run 必须**被排除**，不能拿末代冒充第 g 代；
+    3. 表 E 必须用 `final_hv`，**不是** `hist_hv[-1]` —— 这两者在启用 elite
+       archive 时本来就不同（末代 population 前沿 vs 末代 archive）。
+    """
+
+    @staticmethod
+    def _rows():
+        return [
+            {"instance": "Mk07", "label": "D1", "seed": 42,
+             "hist_hv": [0.1, 0.2, 0.3], "hist_time": [1.0, 2.0, 3.0],
+             "final_hv": 0.99},
+            {"instance": "Mk07", "label": "D1", "seed": 43,
+             "hist_hv": [0.5, 0.6, 0.7], "hist_time": [1.0, 2.0, 3.0],
+             "final_hv": 0.99},
+            {"instance": "Mk07", "label": "D2", "seed": 42,
+             "hist_hv": [0.2, 0.2, 0.2], "hist_time": [1.0, 2.0, 3.0],
+             "final_hv": 0.90},
+        ]
+
+    def test_abs_hv_maps_generation_g_to_index_g_minus_1(self):
+        import response_surface as rs
+        import surface_markdown as sm
+        idx = rs.index_curves(self._rows())
+        lines = sm.abs_hv_table(idx, ["Mk07"], ["D1"], [1, 2, 3])
+        row = [l for l in lines if l.startswith("| Mk07")][0]
+        cells = [c.strip() for c in row.split("|")[3:6]]
+        # 逐 seed 取该代值再平均：(0.1+0.5)/2, (0.2+0.6)/2, (0.3+0.7)/2
+        self.assertEqual(cells, ["0.300000", "0.400000", "0.500000"],
+                         "代数 g 必须读 hist_hv[g-1]；差一位会让整张表系统性偏移")
+
+    def test_abs_hv_drops_runs_shorter_than_the_grid(self):
+        """轨迹不足的 run 必须被剔除，不得用末代冒充第 g 代。"""
+        import response_surface as rs
+        import surface_markdown as sm
+        rows = [
+            {"instance": "Mk07", "label": "D1", "seed": 42,
+             "hist_hv": [0.1, 0.2, 0.3], "hist_time": [1.0, 2.0, 3.0]},
+            {"instance": "Mk07", "label": "D1", "seed": 43,
+             "hist_hv": [0.9, 0.9], "hist_time": [1.0, 2.0]},
+        ]
+        idx = rs.index_curves(rows)
+        lines = sm.abs_hv_table(idx, ["Mk07"], ["D1"], [3])
+        row = [l for l in lines if l.startswith("| Mk07")][0]
+        cell = row.split("|")[3].strip()
+        self.assertEqual(cell, "0.300000",
+                         "只有 seed42 有第 3 代；若把 seed43 的末代当第 3 代会得到 0.6")
+        self.assertNotIn("0.600000", row)
+        self.assertNotIn("0.550000", row)
+
+    def test_pair_table_uses_seed_intersection(self):
+        """配对只能在两臂都有的 seed 上做；交集大小决定 n。"""
+        import response_surface as rs
+        import surface_markdown as sm
+        rows = self._rows() + [
+            {"instance": "Mk07", "label": "D2", "seed": 43,
+             "hist_hv": [0.8, 0.8, 0.8], "hist_time": [1.0, 2.0, 3.0],
+             "final_hv": 0.90},
+            {"instance": "Mk07", "label": "D2", "seed": 44,
+             "hist_hv": [0.8, 0.8, 0.8], "hist_time": [1.0, 2.0, 3.0],
+             "final_hv": 0.90},
+        ]
+        idx = rs.index_curves(rows)
+        lines = sm.pair_table_at_gens(idx, ["Mk07"], [("D2", "D1")], [1])
+        row = [l for l in lines if "D2 − D1" in l][0]
+        # D1 有 {42,43}，D2 有 {42,43,44} → 交集 {42,43}。若错用并集会写 3/3。
+        self.assertIn("2/2", row, "必须在 seed 交集上配对：D1∩D2 = {42,43}")
+        self.assertNotIn("3/3", row, "并集(3) 会凭空多出 seed44 这个 D1 根本没有的配对")
+
+    def test_final_table_uses_final_hv_not_hist_tail(self):
+        """表 E 必须用 final_hv：本例两臂末代相同(0.3/0.2)，只有 final_hv 分得开。"""
+        import response_surface as rs
+        import surface_markdown as sm
+        rows = self._rows()
+        idx = rs.index_curves(rows)
+        lines = sm.final_table(idx, rows, ["Mk07"], [("D1", "D2")])
+        row = [l for l in lines if "D1 − D2" in l][0]
+        # (0.99+0.99)/2 - 0.90 = 0.09；若误用 hist_hv[-1] 会得到 0.25-0.2 = 0.05
+        self.assertIn("+0.090000", row,
+                      "final_hv 与 hist_hv[-1] 在启用 elite 时本就不同，不得混用")
+        self.assertNotIn("+0.050000", row)
+
+    def test_fe_table_renders_from_surface_json(self):
+        """表 D 只做渲染，不重算统计量（统计量唯一真源是 response_surface）。"""
+        import surface_markdown as sm
+        surface = {"fe": {"D5|D2": {"Mk07": [
+            {"FE": 100000.0, "fe_frac": 0.5, "n": 30,
+             "diff": 0.123456, "wins": 25, "p": 0.01, "dz": 1.0}]}}}
+        lines = sm.fe_table(surface, ["Mk07"], [("D5", "D2")])
+        row = [l for l in lines if "D5 − D2" in l][0]
+        self.assertIn("+0.1235", row, "必须原样渲染 surface json 里的 diff")
+        self.assertIn("Mk07 = 200000", "\n".join(lines), "脚注给出各实例公共 FE 上限")
+
+    def test_main_runs_end_to_end_and_skips_sections_without_surface(self):
+        import json
+        import tempfile
+        import contextlib
+        import io
+        import unittest.mock
+        import surface_markdown as sm
+        with tempfile.TemporaryDirectory() as td:
+            lab = os.path.join(td, "m.json")
+            out = os.path.join(td, "m.md")
+            missing = os.path.join(td, "nope.surface.json")
+            with open(lab, "w", encoding="utf-8") as fh:
+                json.dump(self._rows(), fh)
+            argv = ["surface_markdown.py", "--lab", lab, "--surface", missing,
+                    "--gens", "2", "--pairs", "D2=D1", "--out", out]
+            with unittest.mock.patch.object(sys, "argv", argv):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(sm.main(), 0)
+            with open(out, encoding="utf-8") as fh:
+                txt = fh.read()
+            for sec in ("### A.", "### B.", "### E."):
+                self.assertIn(sec, txt)
+            self.assertNotIn("### C.", txt, "无 surface json 时不应伪造饱和表")
+            self.assertNotIn("### D.", txt)
+
+
+class TestFigDecayHelper(unittest.TestCase):
+    """07 图（MIX3 残差衰减）的取值 helper 锁。
+
+    这张图是本轮唯一能把"起跑优势"与"持久机制"分开的证据，且它的指数会被
+    直接抄进报告 §3.6 —— 所以它的取值口径必须和 `surface_markdown` 完全一致：
+    代数 g 读 `hist_hv[g-1]`、配对用 seed 交集、分母是 D1 在该代的均值。
+    """
+
+    @staticmethod
+    def _idx():
+        import response_surface as rs
+        rows = [
+            {"instance": "Mk07", "label": "D1", "seed": 42,
+             "hist_hv": [0.1, 0.2, 0.4], "hist_time": [1.0, 2.0, 3.0]},
+            {"instance": "Mk07", "label": "D1", "seed": 43,
+             "hist_hv": [0.2, 0.4, 0.6], "hist_time": [1.0, 2.0, 3.0]},
+            {"instance": "Mk07", "label": "D2", "seed": 42,
+             "hist_hv": [0.3, 0.5, 0.8], "hist_time": [1.0, 2.0, 3.0]},
+        ]
+        return rs.index_curves(rows)
+
+    def test_resid_uses_g_minus_1_and_seed_intersection(self):
+        """G=2：交集只有 seed42 → diff = 0.5−0.2 = 0.3，分母 = D1 在**交集内**的均值 0.2
+        → rel = 0.3/0.2 = 150%。
+
+        注意分母是"交集内"而不是"该实例全部 D1"：若用后者（(0.2+0.4)/2 = 0.3）
+        会得到 100%，与 `surface_markdown.pair_table_at_gens` 的口径不一致 ——
+        图与报告必须同源，这条锁就是钉这个。
+        """
+        import new_arch_plots as nap
+        got = nap._resid(self._idx(), "Mk07", 2)
+        self.assertAlmostEqual(got, 150.0, places=5)
+
+    def test_resid_raises_no_crash_when_trajectory_too_short(self):
+        """G 超过轨迹长度时不许崩、也不许拿末代顶替（返回 nan）。"""
+        import new_arch_plots as nap
+        got = nap._resid(self._idx(), "Mk07", 9)
+        self.assertTrue(np.isnan(got) or got == 0.0,
+                        "超出轨迹长度应给 nan/0，不得用末代冒充第 9 代")
+
+    def test_fig_decay_skips_missing_pair_without_crashing(self):
+        """缺 D1/D2 配对时要打印提示并返回空串，而不是抛异常。"""
+        import json
+        import tempfile
+        import contextlib
+        import io
+        import new_arch_plots as nap
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "x.json")
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump([{"instance": "Mk07", "label": "D1", "seed": 42,
+                            "hist_hv": [0.1, 0.2], "hist_time": [1.0, 2.0]}], fh)
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                got = nap.fig_decay(p)
+            self.assertEqual(got, "")
+            self.assertIn("跳过", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

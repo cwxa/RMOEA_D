@@ -181,10 +181,16 @@ class RMOEAD:
         `enable_mix3=False` 时退化为纯随机初始化，即论文 RMOEA/D1。
 
         `init_variant` 进一步给出**变体扫描**入口（见 core.operators.INIT_VARIANTS）。
-        动机：MIX3 是消融阶梯里最大的单一组件（+14.46%***），却**从未做过变体扫描**；
+        动机：MIX3 是消融阶梯里最大的单一组件，却**从未做过变体扫描**；
         而且它的三条分支（random / LS / GW）全都把 OS 随机打乱，只在**机器选择**
         维度做文章 —— 工序顺序这一维在初始化阶段完全没被利用。
         `init_variant="mix3"` 与论文口径**逐位相同**（见 tests 的等价锁）。
+
+        效应量按 **实例边界口径**（`instance_hv_bounds`，与臂集无关）为 **+3.406%**
+        （10 实例平均，256/300，p=2.7e-40），是阶梯里最大的一级（次大者 +0.421%）；
+        旧的 `+14.46%` 是**盒口径**产物（放大 4.9×，见 docs/new-arch-report.md §1）。
+        另注：该 +3.406% 是**有限预算的起跑优势** —— G=200 处配对差 +1.937%，
+        到 G=1000 只剩 +0.079%（n.s.）。
 
         初始化：按变体生成个体 → crisp decode 目标值（热路径零分配）。"""
         variant = self.init_variant if self.enable_mix3 else "random"
