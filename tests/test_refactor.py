@@ -9,11 +9,15 @@
   5. 消融诊断中修复的 4 个缺陷回归锁：
      HV 参考集归一化、RVNS Tchebycheff 接受准则、Q-PAS ε 极性、Q 表平局自锁
   6. Q-PAS 论文口径守卫：CV 默认不归一化、奖励默认按式(18)
+  7. AIG 门控：置换零假设（家族错误率）、留一稳健性、目标量 A/B 分离
+  8. 脚本 CLI：每个 scripts/*.py 的 --help 必须退出码 0（缺陷 19/27）
 """
 
 import sys
 import os
 import inspect
+import subprocess
+import tempfile
 import unittest
 import numpy as np
 
@@ -2494,6 +2498,35 @@ class TestAIGPermutation(unittest.TestCase):
         self.assertTrue(np.isnan(res["mc_p_fwer"]))
         self.assertGreater(res["obs_max_abs_rho"], 0.9)
 
+    def test_degenerate_input_returns_skipped_instead_of_crashing(self):
+        """缺陷 27 / 19：退化输入不得抛异常。
+
+        `scripts/init_probe.py --instances Mk01 --seeds 1 --perm 0`（文档 §8 的
+        最小自测形态）曾在这条路径上崩：
+        `ValueError: attempt to get argmax of an empty sequence`
+        —— n=1 时所有候选列恒定 → X 被剔成 0 列 → `np.nanargmax([])`。
+        契约：返回 `skipped` 标记 + 全 None，而不是异常。
+        """
+        m = self._m()
+        # (a) 0 列（全部候选被常量列过滤掉）
+        empty = m.permutation_max_rho(np.zeros((3, 0)), np.array([1., 2., 3.]), 100)
+        self.assertIn("skipped", empty)
+        self.assertIsNone(empty["obs_argmax"])
+        self.assertIsNone(empty["null_p95"])
+        self.assertTrue(np.isnan(empty["mc_p_fwer"]))
+        # (b) 样本数 < 3（相关系数无定义）
+        few = m.permutation_max_rho(np.arange(4, dtype=float).reshape(2, 2),
+                                    np.array([1., 2.]), 100)
+        self.assertIn("skipped", few)
+        self.assertIsNone(few["obs_argmax"])
+        # (c) 正常输入必须**不受**这套退化分支影响
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(10, 3))
+        y = 2.0 * X[:, 1] + 0.01 * rng.normal(size=10)
+        ok = m.permutation_max_rho(X, y, 500, seed=11)
+        self.assertNotIn("skipped", ok)
+        self.assertEqual(ok["obs_argmax"], 1)
+
     def test_null_p95_grows_with_the_number_of_candidates(self):
         """零假设必须对**全部候选**取 max —— 这就是家族错误率校正的本体。
 
@@ -2662,6 +2695,54 @@ class TestAIGTargets(unittest.TestCase):
         self.assertIsNone(perm, "perm=0 时不应产出置换结果")
         self.assertIsNotNone(corr)
         self.assertIsNotNone(loo)
+
+
+class TestScriptCLIHelp(unittest.TestCase):
+    """缺陷 19（文档命令未实测）/ 27（argparse help 里的裸 `%` 直接崩）的机器化锁。
+
+    2026-09-18 实测 `scripts/init_probe.py --help` 抛
+    `ValueError: unsupported format character '?' (0x5f53)` —— argparse 会对 help
+    字符串做一次 `%` 格式化，写 `（… rel%）` 这种中文括号紧跟百分号就崩。
+    这类错误**只有真的跑一次 --help 才会发现**，所以把它钉成回归锁：
+    每个含 argparse 的脚本 `--help` 必须退出码 0。
+    """
+
+    SCRIPTS = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+
+    def test_scripts_dir_is_not_empty(self):
+        names = [n for n in os.listdir(self.SCRIPTS)
+                 if n.endswith(".py") and not n.startswith("_")]
+        self.assertGreaterEqual(len(names), 20)
+
+    def test_every_script_help_exits_zero(self):
+        bad = []
+        for n in sorted(os.listdir(self.SCRIPTS)):
+            if not n.endswith(".py") or n.startswith("_"):
+                continue
+            path = os.path.join(self.SCRIPTS, n)
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                src = fh.read()
+            if "argparse" not in src:
+                continue
+            r = subprocess.run([sys.executable, path, "--help"],
+                               capture_output=True, text=True, timeout=600)
+            if r.returncode != 0:
+                tail = ((r.stderr or "").strip().splitlines() or [""])[-1]
+                bad.append("%s -> %s" % (n, tail[:140]))
+        self.assertEqual(
+            bad, [],
+            "这些脚本 --help 失败（多半是 help 里的裸 %%）：\n" + "\n".join(bad))
+
+    def test_documented_init_probe_command_runs(self):
+        """文档 §8 写死的 init_probe 调用必须真的能跑通（缺陷 19）。"""
+        out = os.path.join(tempfile.gettempdir(), "_probe_argcheck.json")
+        r = subprocess.run(
+            [sys.executable, os.path.join(self.SCRIPTS, "init_probe.py"),
+             "--instances", "Mk01", "--seeds", "1", "--perm", "0", "--out", out],
+            capture_output=True, text=True, timeout=600)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(os.path.exists(out))
 
 
 if __name__ == "__main__":

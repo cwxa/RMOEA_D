@@ -128,6 +128,9 @@ def permutation_max_rho(X, y, n_perm, seed=42):
     「候选彼此不独立」这件事 —— 这正是单变量 p 值漏掉的部分。
 
     返回 dict：观测 max|ρ| 及其变量名、null_p95 / null_p99 / mc_p（MC 校正 p）。
+    退化输入（候选列数为 0、或 y 少于 3 个点、或全部 ρ 都是 nan）返回
+    `skipped` 标记 + 全 None，**不抛异常** —— 缺陷 27：原先会对空数组
+    `np.nanargmax` 直接崩，害得调用方（`init_probe.py` 小规模自测）无法运行。
     """
     xr = stats.rankdata(X, axis=0).astype(float)
     xc = xr - xr.mean(axis=0, keepdims=True)
@@ -135,6 +138,13 @@ def permutation_max_rho(X, y, n_perm, seed=42):
     yr = stats.rankdata(y).astype(float)
 
     rho_obs = _spearman_cols(X, y)
+    if rho_obs.size == 0 or y.size < 3 or np.all(np.isnan(rho_obs)):
+        return {
+            "n_perm": 0, "seed": int(seed), "skipped": "候选为空 / 样本数 < 3",
+            "obs_max_abs_rho": None, "obs_argmax": None, "rho_obs": [],
+            "null_mean": None, "null_p95": None, "null_p99": None,
+            "mc_p_fwer": float("nan"),
+        }
     j_obs = int(np.nanargmax(np.abs(rho_obs)))
 
     rng = np.random.default_rng(seed)

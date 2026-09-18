@@ -677,11 +677,12 @@ Mk07 等墙钟终点（t = 56.71s）各臂的实际位置 —— **与等 FE 结
 | `TestFEMultiplier`（3） | RVNS 臂每代 2× 求值；`fixed` 模式下每解发满档；等 FE 一节真的落盘 |
 | `TestSurfaceMarkdown`（6） | 代数→下标 `hist_hv[g-1]`；短轨迹 run 必须剔除；配对用 **seed 交集**；表 E 必须用 `final_hv`（≠`hist_hv[-1]`）；表 D 只渲染不重算 |
 | `TestFigDecayHelper`（3） | 07 图的残差口径与报告同源（全集内分母、`g-1` 下标）、超长 G 不崩不用末代顶替、缺配对时优雅跳过 |
-| `TestAIGPermutation`（6） | `max\|ρ\|` 置换零假设：能捞回植入的单调关系、纯噪声不显著、置换保留候选相关结构（重复列逐位相同）、k=1 时等于解析 Spearman、**候选越多零假设分布只能越宽**（校正的本体）、`n_perm=0` 返回 nan 不崩 |
+| `TestAIGPermutation`（7） | `max\|ρ\|` 置换零假设：能捞回植入的单调关系、纯噪声不显著、置换保留候选相关结构（重复列逐位相同）、k=1 时等于解析 Spearman、**候选越多零假设分布只能越宽**（校正的本体）、`n_perm=0` 返回 nan 不崩、**退化输入（0 列 / n<3）返回 `skipped` 而不是抛异常**（缺陷 27） |
 | `TestAIGLeaveOneOut`（3） | 完美单调关系留一恒为 1；**离群点去掉后 ρ 立刻回到 1**（该关联由单点决定的判据）；最不利下标与 `min_abs_rho` 一致 |
 | `TestAIGTargets`（4） | 换 `base` 后 `ΔHV` 必须变（否则说明 `base` 没生效）；缺 `base` 的实例被显式跳过；**只改 `final_pf` 不动 `final_hv` 时主口径读数逐位不变、而盒口径读数必须变**（挡住退回盒口径）；`perm=0` 时不出置换结果 |
+| `TestScriptCLIHelp`（3） | **每个含 argparse 的 `scripts/*.py` 的 `--help` 必须退出码 0**；文档 §8 写死的 `init_probe.py` 调用必须真的跑通（缺陷 19/27） |
 
-全套 **172 passed**（`C:/Python312/python.exe -m pytest tests/test_refactor.py -q`）。
+全套 **176 passed**（`C:/Python312/python.exe -m pytest tests/test_refactor.py -q`）。
 
 **本轮新锁的区分度已用变异测试验证**（"放开约束必须失败"）：
 在 `surface_markdown.py` 上植入 3 个真实缺陷并逐一跑测试，每个都被**预期的那一条**锁捕获，
@@ -713,6 +714,24 @@ Mk07 等墙钟终点（t = 56.71s）各臂的实际位置 —— **与等 FE 结
 > `open(path, "w")` 写回，Windows 文本模式把 395 个 `\n` 全转成 `\r\n`，
 > "还原"后的 md5 与备份不符 —— **还原步骤自己在改文件**，而脚本只检查了测试结果。
 > 现已一律二进制读写 + 结束前断言 md5，并把这条写进脚本 docstring。
+
+**缺陷 27（P1，已修）：新脚本 `--help` 直接崩。**
+`scripts/init_probe.py --help` 抛 `ValueError: unsupported format character '?' (0x5f53)` ——
+argparse 会对 help 字符串做一次 `%` 格式化，写 `（… rel%）` 这种**中文右括号紧跟百分号**
+就把它当格式符。同一条路径还发现：`--instances Mk01 --seeds 1 --perm 0`（n=1 → 所有候选列恒定
+→ 全被剔除 → `X` 0 列）会让 `permutation_max_rho` 在空数组上 `np.nanargmax` 崩
+（`attempt to get argmax of an empty sequence`）。
+
+修法与验收：
+
+1. help 里的裸 `%` 全部去掉（改写为"单位为百分比"），不再依赖转义；
+2. `permutation_max_rho` 对退化输入（候选列数 0 / `y` 少于 3 点 / 全 nan）
+   返回 `skipped` 标记 + 全 `None`，**不抛异常**；`init_probe` 在 `keep` 为空或
+   样本数 < 4、或 `--perm <= 0` 时显式跳过并打印原因；
+3. `TestScriptCLIHelp` 把"每个脚本 `--help` 退出码 0"钉成锁 ——
+   **这类错误只有真的跑一次 `--help` 才会发现**，正是缺陷 19 的机器化形态；
+4. **验证是纯空操作**：修完重跑 `init_probe.py` 与 `aig_gating.py`，
+   与修前的正式结果 JSON **逐字段完全相同**（守卫只对退化输入生效）。
 
 **新增脚本**（均可独立复现，无隐藏状态）：
 

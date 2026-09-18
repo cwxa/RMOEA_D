@@ -87,7 +87,7 @@ def main():
     ap.add_argument("--n_pop", type=int, default=100)
     ap.add_argument("--data_dir", default=os.path.join(ROOT, "data"))
     ap.add_argument("--aig", default=os.path.join(ROOT, "logs", "aig_gating.json"),
-                    help="预测目标来源（目标 B 的逐实例 ΔHV rel%）")
+                    help="预测目标来源（目标 B 的逐实例 ΔHV 相对增幅，单位为百分比）")
     ap.add_argument("--target", default="vs_I_mix3",
                     help="aig_gating.json 里 targets 的键（默认目标 B）")
     ap.add_argument("--perm", type=int, default=20000)
@@ -193,43 +193,61 @@ def main():
                          r["probe_init_hv_lever_pct"],
                          ymap[r["instance"]], aig.iva.stars(f["p"])))
 
-            print("\n  秩相关（n=%d）：" % len(use))
-            corr = {}
-            for j, k in enumerate(keys):
-                ok = ~np.isnan(X[:, j])
-                if ok.sum() < 4 or np.allclose(X[ok, j], X[ok, j][0]):
-                    continue
-                rho, p = stats.spearmanr(X[ok, j], y[ok])
-                corr[k] = {"spearman_rho": float(rho), "spearman_p": float(p),
-                           "n": int(ok.sum()),
-                           "ex_ante": not k.startswith(("ms_lever", "wl_lever"))}
-                tag = "  <- 本探针（事前）" if k.startswith("probe") else \
-                      ("  <- 事前结构特征" if k in aig.EX_ANTE else "  (事后)")
-                print("    %-26s rho=%+.3f  p=%.4f  (n=%d)%s"
-                      % (k, rho, p, ok.sum(), tag))
+            corr, res, loo = {}, None, None
+            if not keep:
+                print("  [!] 可用实例 %d 个、且全部候选列恒定 → 跳过秩相关/置换/留一"
+                      % len(use))
+            else:
+                print("\n  秩相关（n=%d）：" % len(use))
+                for j, k in enumerate(keys):
+                    ok = ~np.isnan(X[:, j])
+                    if ok.sum() < 4 or np.allclose(X[ok, j], X[ok, j][0]):
+                        continue
+                    rho, p = stats.spearmanr(X[ok, j], y[ok])
+                    corr[k] = {"spearman_rho": float(rho), "spearman_p": float(p),
+                               "n": int(ok.sum()),
+                               "ex_ante": not k.startswith(("ms_lever", "wl_lever"))}
+                    tag = "  <- 本探针（事前）" if k.startswith("probe") else \
+                          ("  <- 事前结构特征" if k in aig.EX_ANTE else "  (事后)")
+                    print("    %-26s rho=%+.3f  p=%.4f  (n=%d)%s"
+                          % (k, rho, p, ok.sum(), tag))
 
-            print("\n  ★ 置换家族错误率（候选 %d 个：探针量 + 结构特征）" % len(keys))
-            res = aig.permutation_max_rho(X, y, args.perm, seed=args.perm_seed)
-            res["keys"] = keys
-            res["obs_argmax_key"] = keys[res["obs_argmax"]]
-            print("    观测 max|rho| = %+.3f (%s)"
-                  % (res["obs_max_abs_rho"], res["obs_argmax_key"]))
-            print("    零假设: 均值 %.3f  95%% %.3f  99%% %.3f"
-                  % (res["null_mean"], res["null_p95"], res["null_p99"]))
-            print("    -> 校正 p = %.4f  %s"
-                  % (res["mc_p_fwer"], aig.iva.stars(res["mc_p_fwer"])))
+            if not keep or len(use) < 4:
+                print("\n  [i] 样本数 %d（<4）→ 跳过置换零假设与留一（无统计意义）"
+                      % len(use))
+            elif args.perm <= 0:
+                print("\n  [i] --perm %d <= 0 → 跳过置换零假设（与 aig_gating 的契约一致）"
+                      % args.perm)
+            else:
+                print("\n  ★ 置换家族错误率（候选 %d 个：探针量 + 结构特征）" % len(keys))
+                res = aig.permutation_max_rho(X, y, args.perm, seed=args.perm_seed)
+                res["keys"] = keys
+                if res.get("obs_argmax") is None:
+                    print("    [!] 退化输入，置换结果已跳过：%s" % res.get("skipped"))
+                    res = None
+                else:
+                    res["obs_argmax_key"] = keys[res["obs_argmax"]]
+                    print("    观测 max|rho| = %+.3f (%s)"
+                          % (res["obs_max_abs_rho"], res["obs_argmax_key"]))
+                    print("    零假设: 均值 %.3f  95%% %.3f  99%% %.3f"
+                          % (res["null_mean"], res["null_p95"], res["null_p99"]))
+                    print("    -> 校正 p = %.4f  %s"
+                          % (res["mc_p_fwer"], aig.iva.stars(res["mc_p_fwer"])))
 
-            loo = aig.leave_one_out(X, y, keys)
-            print("\n  留一稳健性（按 |rho| 降序取前 4）")
-            for k in sorted(keys, key=lambda k: -abs(loo[k]["rho_all"]))[:4]:
-                d = loo[k]
-                print("    %-26s rho(全)=%+.3f  留一区间 [%+.3f, %+.3f]  最不利: %s"
-                      % (k, d["rho_all"], d["min_rho"], d["max_rho"],
-                         [r["instance"] for r in use][d["worst_drop_idx"]]))
-            payload.update({"correlations": corr, "permutation": res,
-                            "leave_one_out": loo,
-                            "y": {"key": args.target,
-                                  "values": {r["instance"]: ymap[r["instance"]] for r in use}}})
+            if keep and len(use) >= 4:
+                loo = aig.leave_one_out(X, y, keys)
+                print("\n  留一稳健性（按 |rho| 降序取前 4）")
+                for k in sorted(keys, key=lambda k: -abs(loo[k]["rho_all"]))[:4]:
+                    d = loo[k]
+                    print("    %-26s rho(全)=%+.3f  留一区间 [%+.3f, %+.3f]  最不利: %s"
+                          % (k, d["rho_all"], d["min_rho"], d["max_rho"],
+                             [r["instance"] for r in use][d["worst_drop_idx"]]))
+            if corr or res or loo:
+                payload.update({"correlations": corr, "permutation": res,
+                                "leave_one_out": loo,
+                                "y": {"key": args.target,
+                                      "values": {r["instance"]: ymap[r["instance"]]
+                                                 for r in use}}})
 
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=1)
