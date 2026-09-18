@@ -2411,5 +2411,258 @@ class TestFigDecayHelper(unittest.TestCase):
             self.assertIn("跳过", buf.getvalue())
 
 
+class TestAIGPermutation(unittest.TestCase):
+    """`aig_gating.permutation_max_rho`：max|rho| 的置换零假设。
+
+    为什么必须有这一层：AIG 的结论形态是"在 8 个候选里挑 ρ 最大者"。
+    n=10 时纯噪声下 max|ρ| 的 95% 分位就有 ~0.81，
+    所以**单变量 p 值会把噪声报成发现**。这几条锁钉住：
+    (a) 植入的单调关系必须被捞回来；
+    (b) 纯噪声不能被判显著；
+    (c) 置换必须保留候选之间的相关结构（重复列不改变 max|ρ|）；
+    (d) 边界：`n_perm=0` 返回 None/nan 而不是崩。
+    """
+
+    @staticmethod
+    def _m():
+        import importlib
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__),
+                                        '..', 'scripts'))
+        return importlib.import_module("aig_gating")
+
+    def test_planted_monotone_relation_is_detected(self):
+        m = self._m()
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(10, 6))
+        y = 3.0 * X[:, 3] + 0.01 * rng.normal(size=10)   # 第 3 列是真因
+        res = m.permutation_max_rho(X, y, 2000, seed=1)
+        self.assertGreater(res["obs_max_abs_rho"], 0.97)
+        self.assertEqual(res["obs_argmax"], 3,
+                         "必须指认出真正相关的那一列")
+        self.assertLess(res["mc_p_fwer"], 0.01)
+
+    def test_pure_noise_is_not_significant(self):
+        m = self._m()
+        rng = np.random.default_rng(12345)
+        X = rng.normal(size=(10, 6))
+        y = rng.normal(size=10)                          # 与 X 无关
+        res = m.permutation_max_rho(X, y, 4000, seed=7)
+        self.assertGreater(res["mc_p_fwer"], 0.05,
+                           "纯噪声不得被判显著（否则这层校正就是摆设）")
+        self.assertLess(res["null_p95"], 1.0)
+
+    def test_duplicated_column_preserves_null_structure(self):
+        """置换只打乱 y —— 所以完全相关的两列，其 max|ρ| 与单列**逐位相同**。
+
+        这条钉住的是"保留候选间相关结构"这个设计点：
+        若实现改成"独立重抽 X"，重复列会被当成两次独立检验，
+        null 分布就会变窄（把多重比较的严苛度做没了）。
+        """
+        m = self._m()
+        rng = np.random.default_rng(5)
+        c0 = rng.normal(size=10)
+        c1 = rng.normal(size=10)
+        y = rng.normal(size=10)
+        one = m.permutation_max_rho(c0[:, None], y, 500, seed=3)
+        two = m.permutation_max_rho(np.column_stack([c0, c0]), y, 500, seed=3)
+        self.assertAlmostEqual(one["obs_max_abs_rho"], two["obs_max_abs_rho"],
+                               places=12)
+        self.assertAlmostEqual(one["null_p95"], two["null_p95"], places=12)
+        # 区分度：换成一列**无关**的新列，max|ρ| 的观测值必须变大或不变
+        three = m.permutation_max_rho(np.column_stack([c0, c1]), y, 500, seed=3)
+        self.assertGreaterEqual(three["obs_max_abs_rho"],
+                                one["obs_max_abs_rho"] - 1e-12)
+
+    def test_obs_matches_analytic_spearman(self):
+        """k=1 时 max|ρ| 必须等于 `scipy.spearmanr` 的 |ρ|（不是 pearson）。"""
+        from scipy import stats
+        m = self._m()
+        rng = np.random.default_rng(9)
+        x = rng.normal(size=10)
+        y = rng.normal(size=10)
+        res = m.permutation_max_rho(x[:, None], y, 200, seed=2)
+        self.assertAlmostEqual(res["obs_max_abs_rho"],
+                               abs(stats.spearmanr(x, y).statistic), places=12)
+
+    def test_zero_perm_returns_nan_without_crashing(self):
+        m = self._m()
+        X = np.arange(20, dtype=float).reshape(10, 2)
+        y = np.arange(10, dtype=float)
+        res = m.permutation_max_rho(X, y, 0)
+        self.assertEqual(res["n_perm"], 0)
+        self.assertIsNone(res["null_p95"])
+        self.assertTrue(np.isnan(res["mc_p_fwer"]))
+        self.assertGreater(res["obs_max_abs_rho"], 0.9)
+
+    def test_null_p95_grows_with_the_number_of_candidates(self):
+        """零假设必须对**全部候选**取 max —— 这就是家族错误率校正的本体。
+
+        这条是被一次真实变异测试**逼出来**的：把 `max_null` 写成 `|rho_null[0]|`
+        （只看第一个候选）时，观测值、argmax、单点 p 全都不变，
+        上面 5 条锁一条都抓不住 —— 但校正已经没了。
+        判据：候选越多，`max|ρ|` 的零假设分布只能越宽。
+        """
+        m = self._m()
+        rng = np.random.default_rng(31)
+        X = rng.normal(size=(10, 6))
+        y = rng.normal(size=10)
+        one = m.permutation_max_rho(X[:, :1], y, 3000, seed=4)
+        six = m.permutation_max_rho(X, y, 3000, seed=4)
+        self.assertGreater(six["null_p95"] - one["null_p95"], 0.10,
+                           "6 个候选的零假设 95% 分位必须明显高于 1 个候选；"
+                           "若相等说明只对第一个候选取了 max，校正失效")
+        self.assertGreaterEqual(six["null_mean"], one["null_mean"] - 1e-12)
+        self.assertGreaterEqual(six["null_p99"], one["null_p99"] - 1e-12)
+
+
+class TestAIGLeaveOneOut(unittest.TestCase):
+    """`aig_gating.leave_one_out`：n=10 的相关性"是不是被一个点撑起来的"。"""
+
+    @staticmethod
+    def _m():
+        import importlib
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__),
+                                        '..', 'scripts'))
+        return importlib.import_module("aig_gating")
+
+    def test_perfect_relation_survives_every_fold(self):
+        m = self._m()
+        x = np.arange(10, dtype=float)
+        y = 2.0 * x + 1.0
+        res = m.leave_one_out(x[:, None], y, ["perfect"])
+        d = res["perfect"]
+        self.assertAlmostEqual(d["min_rho"], 1.0, places=12)
+        self.assertAlmostEqual(d["max_rho"], 1.0, places=12)
+
+    def test_single_outlier_can_destroy_the_relation(self):
+        """一个离群点能让整体 ρ 掉到 0.5 以下；**去掉它 ρ 立刻回到 1.0**。
+
+        这正是"该关联由单点决定"的判据 —— 报告里 `total_ops` 的留一区间
+        [+0.756, +0.874] 就是靠这条排除"只有 Mk10 撑场"。
+        注意：去掉离群点得到的是**最好**的那一折（max_rho），不是最差的那折。
+        """
+        m = self._m()
+        x = np.arange(10, dtype=float)
+        y = np.arange(10, dtype=float)
+        y[-1] = -100.0                                  # 单点反向离群
+        res = m.leave_one_out(x[:, None], y, ["outlier"])
+        d = res["outlier"]
+        self.assertLess(d["rho_all"], 0.5)
+        self.assertAlmostEqual(d["max_rho"], 1.0, places=12)
+        self.assertEqual(d["worst_drop_idx"], 0,
+                         "去掉首点后是一个错位排列，那才是 |ρ| 最小的那一折")
+
+    def test_worst_index_is_consistent_with_min_abs_rho(self):
+        from scipy import stats
+        m = self._m()
+        rng = np.random.default_rng(11)
+        X = rng.normal(size=(10, 3))
+        y = X[:, 1] + 0.3 * rng.normal(size=10)
+        names = ["a", "b", "c"]
+        res = m.leave_one_out(X, y, names)
+        for j, nm in enumerate(names):
+            d = res[nm]
+            self.assertGreaterEqual(d["worst_drop_idx"], 0)
+            self.assertLess(d["worst_drop_idx"], 10)
+            msk = np.ones(10, bool)
+            msk[d["worst_drop_idx"]] = False
+            got = abs(stats.spearmanr(X[msk, j], y[msk]).statistic)
+            self.assertAlmostEqual(d["min_abs_rho"], got, places=10)
+
+
+class TestAIGTargets(unittest.TestCase):
+    """目标量必须真的可切换，且读数只来自 `final_hv`（实例边界口径）。
+
+    缺陷 26 的形态是"目标量错位"：拿 `vs I_rand` 去预测"该不该用 MWR"。
+    这里钉住 (a) `base` 真的生效；(b) 缺 `base` 的实例被显式跳过；
+    (c) 读数只认 `final_hv` —— 改 `final_pf` 不该动结果。
+    """
+
+    @staticmethod
+    def _m():
+        import importlib
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__),
+                                        '..', 'scripts'))
+        return importlib.import_module("aig_gating")
+
+    @staticmethod
+    def _rows(inst, base_hv, mwr_hv, with_mix3):
+        rows = []
+        for s in range(6):
+            rows.append(dict(instance=inst, label="I_rand", seed=42 + s,
+                             final_hv=0.80 + 0.001 * s,
+                             final_pf=[[100.0 + s, 900.0 + s]]))
+            rows.append(dict(instance=inst, label="I_mwr", seed=42 + s,
+                             final_hv=mwr_hv + 0.001 * s,
+                             final_pf=[[95.0 + s, 880.0 + s]]))
+            if with_mix3:
+                rows.append(dict(instance=inst, label="I_mix3", seed=42 + s,
+                                 final_hv=base_hv + 0.001 * s,
+                                 final_pf=[[97.0 + s, 890.0 + s]]))
+        return rows
+
+    def test_dhv_depends_on_the_chosen_base(self):
+        m = self._m()
+        per = {"Mk01": self._rows("Mk01", 0.81, 0.83, True),
+               "Mk02": self._rows("Mk02", 0.90, 0.905, True)}
+        a, _ = m.build_recs(per, "I_rand", "", verbose=False)
+        b, _ = m.build_recs(per, "I_mix3", "", verbose=False)
+        self.assertEqual([r["base"] for r in a], ["I_rand"] * 2)
+        self.assertEqual([r["base"] for r in b], ["I_mix3"] * 2)
+        for ra, rb in zip(a, b):
+            self.assertNotAlmostEqual(ra["dhv_rel_pct"], rb["dhv_rel_pct"],
+                                      places=6,
+                                      msg="换 base 后 ΔHV 没变 -> base 根本没生效")
+            self.assertGreater(ra["dhv_rel_pct"], rb["dhv_rel_pct"],
+                               "I_mwr vs I_rand 必须大于 I_mwr vs I_mix3")
+
+    def test_instances_lacking_the_base_are_skipped_explicitly(self):
+        m = self._m()
+        per = {"Mk07": self._rows("Mk07", 0.81, 0.83, True),
+               "Mk08": self._rows("Mk08", 0.0, 0.83, False)}
+        recs, skipped = m.build_recs(per, "I_mix3", "", verbose=False)
+        self.assertEqual([r["instance"] for r in recs], ["Mk07"])
+        self.assertEqual(skipped, ["Mk08"],
+                         "缺 base 的实例必须被显式报出，不能静默出 nan")
+
+    def test_reads_final_hv_not_the_box(self):
+        """只改 `final_pf`（不动 `final_hv`）时，主口径读数必须一字不变。
+
+        这条同时挡住"退回盒口径"的回归：盒由参与臂的前沿极值构造，
+        所以**只放大其中一个臂**的前沿 → 盒会变。于是
+        实例边界读数不动、盒口径读数必须动 —— 两边一起验才有区分度。
+        （若把全部臂同比例放大则盒同步缩放，盒口径也不动 —— 那不是有效扰动。）
+        """
+        m = self._m()
+        per_a = {"Mk10": self._rows("Mk10", 0.90, 0.93, True)}
+        per_b = {"Mk10": self._rows("Mk10", 0.90, 0.93, True)}
+        for r in per_b["Mk10"]:
+            if r["label"] == "I_mwr":                   # 只动一个臂
+                r["final_pf"] = [[p[0] * 1.5, p[1] * 1.5] for p in r["final_pf"]]
+        ra, _ = m.build_recs(per_a, "I_mix3", "", verbose=False)
+        rb, _ = m.build_recs(per_b, "I_mix3", "", verbose=False)
+        self.assertAlmostEqual(ra[0]["dhv_rel_pct"], rb[0]["dhv_rel_pct"],
+                               places=12)
+        self.assertAlmostEqual(ra[0]["dhv"], rb[0]["dhv"], places=12)
+        # 反证（区分度）：盒口径的量必须动，否则说明根本没算盒
+        self.assertNotAlmostEqual(ra[0]["dhv_rel_box_pct"],
+                                  rb[0]["dhv_rel_box_pct"], places=6)
+
+    def test_analyze_skips_permutation_when_perm_zero(self):
+        m = self._m()
+        recs = [dict(instance="Mk%02d" % i, dhv_rel_pct=float(i),
+                     total_ops=10 * i, n_jobs=i, n_machines=i,
+                     flex_ratio=0.1 * i, pt_cv=0.01 * i, load_ratio=float(i),
+                     ms_lever_pct=float(i), wl_lever_pct=float(i))
+                for i in range(1, 7)]
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            corr, perm, loo = m.analyze(recs, 0, 42)
+        self.assertIsNone(perm, "perm=0 时不应产出置换结果")
+        self.assertIsNotNone(corr)
+        self.assertIsNotNone(loo)
+
+
 if __name__ == "__main__":
     unittest.main()
