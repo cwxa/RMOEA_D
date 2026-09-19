@@ -39,6 +39,24 @@ def run(cmd, cwd=HERE, env=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+def scan_log(log):
+    """从 LaTeX 日志里数出三类**交付级**告警。
+
+    - `Missing character`：字体缺字，PDF 上直接少字。
+    - `Overfull \\hbox`：内容超出版心宽度。
+    - `Float too large for page`：浮体（表/图）比整页还高。**这一类不会产生
+      Overfull 告警**，LaTeX 只是警告后把浮体强行排出纸张——即内容跑到页面外。
+      2026-09-19 实测 `tab_hurink`（66 行单栏）超出 517 pt、`tab_instances`
+      超出 97 pt，此前一直没被交付判据拦住（判据只认 "1000pt" 以上的超宽）。
+      现在把三类一并计数，交付判据 = 三者全为 0。
+    """
+    lines = log.split("\n")
+    miss = [l for l in lines if "Missing character" in l]
+    over = [l for l in lines if "Overfull \\hbox" in l]
+    flt = [l for l in lines if "Float too large" in l]
+    return miss, over, flt
+
+
 def referenced(tex):
     """收集 main.tex 里引用的相对路径。"""
     src = io.open(os.path.join(HERE, tex), encoding="utf-8").read()
@@ -139,11 +157,11 @@ def main():
         return rc
     log = io.open(os.path.join(HERE, os.path.splitext(args.tex)[0] + ".log"),
                   encoding="utf-8", errors="replace").read()
-    warn = [l for l in log.split("\n")
-            if "Missing character" in l or "Overfull \\hbox" in l and "1000" in l]
-    print("\n[OK] %s  %.1f KB  缺字告警 %d 条"
-          % (os.path.basename(pdf), os.path.getsize(pdf) / 1024, len(warn)))
-    for l in warn[:8]:
+    miss, over, flt = scan_log(log)
+    print("\n[OK] %s  %.1f KB  缺字 %d / 超宽 %d / 浮体过大 %d"
+          % (os.path.basename(pdf), os.path.getsize(pdf) / 1024,
+             len(miss), len(over), len(flt)))
+    for l in (miss + over + flt)[:8]:
         print("   ", l[:150])
     return 0
 

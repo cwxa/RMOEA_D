@@ -253,6 +253,11 @@ def pair_over(hv, a, b, instances):
 
 # ────────────────────────────── 1. 实例集 ──────────────────────────────
 def tab_instances(data, allow_missing):
+    """实例集特征表。**必须排成两栏**：开发集 10 行 + Hurink 分组约 30 行，
+    单栏时整表比 A4 文本区还高，LaTeX 会报 "Float too large for page"
+    并把表强行排出页面（2026-09-19 实测超出 97 pt）。这里统一用 12 列
+    （左右各 6 列）续排，(a) 段右侧留空。
+    """
     from rmoea_d.core.instance import load_instance
     rows_mk = []
     for i in range(1, 11):
@@ -260,13 +265,20 @@ def tab_instances(data, allow_missing):
         inst = load_instance(n, os.path.join(ROOT, "data"), 42)
         rows_mk.append((n, inst["n_jobs"], inst["n_machines"], inst["total_ops"],
                         _flex(inst), _pt_cv(inst)))
-    body = ["    \\multicolumn{6}{l}{\\textit{(a) Brandimarte Mk01--Mk10："
-            "复现与消融的开发集}}\\\\", "    \\cmidrule(lr){1-6}",
-            "    \\multicolumn{1}{l}{\\textit{实例}} & \\textit{工件} & \\textit{机器} & "
-            "\\textit{工序} & \\textit{弹性比} & \\textit{$c_v$} \\\\",
+    BLANK6 = " & ".join([""] * 6)
+    # 表头必须**逐字段**包 \textit{}：把整串（含 &）包进一个 \textit{} 会让
+    # & 出现在命令参数内部，LaTeX 直接报 "Misplaced alignment tab"。
+    HEAD6 = " & ".join("\\textit{%s}" % x
+                       for x in ("实例", "工件", "机器", "工序", "弹性比", "$c_v$"))
+    HEAD6H = " & ".join("\\textit{%s}" % x
+                        for x in ("实例数", "工件", "机器", "工序", "弹性比", ""))
+    body = ["    \\multicolumn{12}{l}{\\textit{(a) Brandimarte Mk01--Mk10："
+            "复现与消融的开发集}}\\\\", "    \\cmidrule(lr){1-12}",
+            "    %s & %s \\\\" % (HEAD6, HEAD6),
             "    \\midrule"]
     for n, j, m, o, fx, cv in rows_mk:
-        body.append("    %s & %d & %d & %d & %.2f & %.2f \\\\" % (n, j, m, o, fx, cv))
+        body.append("    %s & %d & %d & %d & %.2f & %.2f & %s \\\\"
+                    % (n, j, m, o, fx, cv, BLANK6))
 
     meta = None
     if need(os.path.join(ROOT, "data", "hurink", "PROVENANCE.json"), allow_missing,
@@ -282,23 +294,31 @@ def tab_instances(data, allow_missing):
                 s = v["shape"]
                 grp[(s["n_jobs"], s["n_machines"], s["total_ops"], s["flex_mean"])] += 1
         n_hed = sum(grp.values())
+        cells = ["$\\times$%d & %d & %d & %d & %.2f &" % (c, j, m, o, fx)
+                 for (j, m, o, fx), c in sorted(grp.items(), key=lambda kv: kv[0][2])]
+        half = (len(cells) + 1) // 2
+        left, right = cells[:half], cells[half:]
         body.append("    \\midrule")
-        body.append("    \\multicolumn{6}{l}{\\textit{(b) Hurink $e$-data："
+        body.append("    \\multicolumn{12}{l}{\\textit{(b) Hurink $e$-data："
                     "%d 个实例，全部用作\\textbf{独立留出集}（不挑选）}}\\\\" % n_hed)
-        body.append("    \\cmidrule(lr){1-6}")
-        for (j, m, o, fx), c in sorted(grp.items(), key=lambda kv: kv[0][2]):
-            body.append("    $\\times$%d & %d & %d & %d & %.2f & -- \\\\" % (c, j, m, o, fx))
+        body.append("    \\cmidrule(lr){1-12}")
+        body.append("    %s & %s \\\\" % (HEAD6H, HEAD6H))
+        for k in range(half):
+            r = right[k] if k < len(right) else BLANK6
+            body.append("    %s & %s \\\\" % (left[k], r))
         ops = sorted(v["shape"]["total_ops"] for v in meta.values()
                      if isinstance(v, dict) and "shape" in v)
         notes += ("Hurink $e$-data 共 %d 个实例，规模 %d--%d 道工序；"
-                  "上表按 (工件, 机器, 工序) 分组合并，$\\times c$ 为组内实例数。"
+                  "(b) 段左右两栏续排，按 (工件, 机器, 工序) 分组合并，$\\times c$ 为组内实例数。"
                   "全部实例都进留出集，\\textbf{没有任何按结果的事后挑选}。"
                   % (n_hed, ops[0], ops[-1]))
     else:
-        body.append("    \\midrule\n    \\multicolumn{6}{l}{\\textit{"
+        body.append("    \\midrule\n    \\multicolumn{12}{l}{\\textit{"
                     "Hurink 留出集数据未就绪}}\\\\")
     write_tex("tab_instances.tex", table_wrap(
-        "实例集特征", "tab:instances", "\n".join(body), "lrrrrr", notes=notes))
+        "实例集特征（(b) 段左右两栏续排）", "tab:instances", "\n".join(body),
+        "lrrrrr@{\\hspace{10pt}}lrrrrr", font="\\footnotesize", colsep=4,
+        notes=notes))
     return {"brandimarte": rows_mk, "n_hurink": n_hed}
 
 
@@ -612,21 +632,32 @@ def hurink_gate(data, allow_missing):
     agree = sum(1 for i in hold
                 if (lam[i] >= THR) == is_gain(B[i]["dhv_rel_pct"], B[i]["p"]))
 
-    body = []
+    cells = []
     for i in hold:
         b = B[i]
-        body.append("    %s & %s & %s & %d/%d & %s & %s & %s \\\\"
-                    % (i, num(lam[i], 2), num(b["dhv_rel_pct"]), b["wins"], b["n"],
-                       num(b["dz"], 2), ptex(b["p"]),
-                       "$\\checkmark$" if is_gain(b["dhv_rel_pct"], b["p"])
-                       else "--"))
+        cells.append("%s & %s & %s & %d/%d & %s & %s & %s"
+                     % (i, num(lam[i], 2), num(b["dhv_rel_pct"]), b["wins"], b["n"],
+                        num(b["dz"], 2), ptex(b["p"]),
+                        "$\\checkmark$" if is_gain(b["dhv_rel_pct"], b["p"])
+                        else "--"))
+    # **必须两栏续排**：66 行单栏时整表比 A4 文本区还高 517 pt，LaTeX 会报
+    # "Float too large for page" 并把表强行排出纸张（2026-09-19 实测）。
+    # 两栏后 33 行，余量充足。
+    half = (len(cells) + 1) // 2
+    left, right = cells[:half], cells[half:]
+    HEAD = " & ".join(["实例", "$\\lambda_0$(\\%)", "$\\Delta$HV(\\%)", "胜出",
+                       "$d_z$", "$p$", "显著"])
+    rows = ["    " + HEAD + " & " + HEAD + " \\\\", "    \\midrule"]
+    for k in range(half):
+        r = right[k] if k < len(right) else " & ".join([""] * 7)
+        rows.append("    %s & %s \\\\" % (left[k], r))
     write_tex("tab_hurink.tex", table_wrap(
         "独立留出集（Hurink $e$-data，$n=%d$）：零代探针 $\\lambda_0$ 与 MWR 净增量"
-        % len(hold),
+        "（左右两栏续排，左栏 Hed01--，右栏续接）" % len(hold),
         "tab:hurink",
-        "    实例 & $\\lambda_0$(\\%) & $\\Delta$HV(\\%) & 胜出 & $d_z$ & $p$ & 显著为正 \\\\\n"
-        "    \\midrule\n" + "\n".join(body),
-        "rrrrrlr",
+        "\n".join(rows),
+        "rrrrrlr@{\\hspace{6pt}}rrrrrlr",
+        font="\\scriptsize", colsep=3,
         notes=("$\\lambda_0$ 为\\textbf{零代探针}给出的初始前沿 HV 杠杆（MWR $-$ MIX3，"
                r"只调一次 \texttt{\_init\_population()}，不做任何搜索）。"
                "门限 $\\lambda_0\\ge -1.0\\%$ 在开发集（Mk01--Mk10）上标定后\\textbf{冻结}。"
@@ -807,6 +838,71 @@ def fig_ladder(data, allow_missing):
 # ────────────────────────────── main ──────────────────────────────
 # ─────────────────── 8. 正文数字宏：让正文数字也只有一个来源 ───────────────────
 _TEX_NAME_OK = re.compile(r"[A-Za-z]+\Z")
+
+
+def fig_concept(data, allow_missing):
+    """概念示意图（**手工构造的示意点，不是实验结果**）。
+
+    第 2 节面向不熟悉多目标优化的读者，用两栏把两件事讲清楚：
+    (a) Pareto 支配与 Pareto 前沿；(b) 超体积 HV 是什么、为什么它必须先
+    把两个目标归一化到同一量纲——而"归一化边界怎么取"正是评价口径一节的主题。
+
+    与其它图不同，这张图**不读 logs/**：它的点是为讲清概念而构造的示意图，
+    因此不参与任何结论、也不受"一个数字一个来源"的约束。代价是必须在
+    caption 里显式声明"示意、非实验结果"，否则读者会把它当成实验读数。
+    """
+    # 前沿按 x 升序、y 递减（最小化问题，左下为优）
+    pf = np.array([[0.05, 0.80], [0.18, 0.55], [0.34, 0.38],
+                   [0.52, 0.24], [0.72, 0.14], [0.90, 0.07]])
+    dom = np.array([[0.52, 0.62], [0.70, 0.44], [0.30, 0.72], [0.86, 0.30]])
+    rx, ry = REF                      # 归一化后参考点 (1.02, 1.02)
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.8))
+
+    # ── (a) Pareto 支配：A 的右上矩形内，任何解都被 A 支配 ──
+    ax = axes[0]
+    a = pf[2]
+    ax.add_patch(plt.Rectangle((a[0], a[1]), rx - a[0], ry - a[1],
+                               facecolor=C_GREY, alpha=0.18,
+                               edgecolor="none", zorder=1))
+    ax.scatter(dom[:, 0], dom[:, 1], s=26, facecolor="none", edgecolor=C_GREY,
+               linewidth=1.1, zorder=3, label="dominated solution")
+    ax.plot(pf[:, 0], pf[:, 1], "-", color=C_RED, lw=1.2, zorder=2)
+    ax.scatter(pf[:, 0], pf[:, 1], s=32, color=C_RED, zorder=4,
+               label="non-dominated (Pareto front)")
+    ax.plot([a[0]], [a[1]], marker="o", ms=7, mfc="none", mec="k", mew=1.0, zorder=5)
+    ax.annotate("A", xy=(a[0], a[1]), xytext=(a[0] - 0.02, a[1] - 0.10),
+                fontsize=7.5, fontweight="bold", zorder=6)
+    ax.annotate("A dominates every solution here\n(both objectives no worse)",
+                xy=(0.70, 0.62), xytext=(0.30, 0.95), fontsize=6.0,
+                arrowprops=dict(arrowstyle="->", lw=0.7, color=C_GREY), zorder=6)
+    ax.set_title("(a) No single best schedule:\nPareto domination", fontsize=8)
+    ax.legend(fontsize=5.9, frameon=False, loc="lower left",
+              bbox_to_anchor=(-0.015, -0.02))
+
+    # ── (b) HV：把整条前沿压成一个数 ──
+    ax = axes[1]
+    xs = np.append(pf[:, 0], rx)
+    ys = np.append(pf[:, 1], pf[-1, 1])
+    ax.fill_between(xs, ys, ry, step="post", color=C_BLUE, alpha=0.22,
+                    lw=0, zorder=1)
+    ax.plot(pf[:, 0], pf[:, 1], "-", color=C_RED, lw=1.2, zorder=2)
+    ax.scatter(pf[:, 0], pf[:, 1], s=32, color=C_RED, zorder=4,
+               label="Pareto 前沿")
+    ax.scatter([rx], [ry], s=46, marker="*", color="k", zorder=5,
+               label="reference point ref $=(%.2f,%.2f)$" % REF)
+    ax.text(0.06, 0.92, "HV = shaded area\n(one scalar per front)",
+            fontsize=6.0, zorder=6)
+    ax.set_title("(b) Hypervolume (HV):\nfirst normalize both objectives", fontsize=8)
+
+    for ax in axes:
+        ax.set_xlim(-0.03, 1.09)
+        ax.set_ylim(-0.03, 1.09)
+        ax.set_xlabel("$f_1$ = makespan (normalized, min)", fontsize=6.6)
+        ax.set_ylabel("$f_2$ = machine load (normalized, min)", fontsize=6.6)
+        ax.tick_params(labelsize=6.0)
+        ax.grid(alpha=0.18, lw=0.35)
+    save_fig(fig, "fig_concept.pdf")
+    return {"n_pf": int(len(pf)), "n_dom": int(len(dom))}
 
 
 def tex_macro_line(name, val):
@@ -1115,6 +1211,29 @@ def write_macros(data, allow_missing, write=True):
         for nm in ("BoxNoSigN", "BoxNoSigLo", "BoxNoSigHi", "BoxNoSigMed",
                    "BoxNoSigFlipN"):
             m(nm, 0)
+    # —— 跨实例量级（§3.2 跨实例污染）：正文原先手写"Mk07 约 150/700、Mk10 约
+    #    300/2000"并称"相差一个数量级"——但那两个实例只差 2.8 倍，例子与论断不符。
+    #    实测开发集内**负载下界**最小/最大为 Mk02/Mk08，跨度 18×，"一个数量级"
+    #    成立，只是例子选错了。改为从实例数据现场算（instance_hv_bounds，确定性）。
+    try:
+        from rmoea_d.core.instance import load_instance
+        from rmoea_d.utils.metrics import instance_hv_bounds
+        _b = []
+        for _i in range(1, 11):
+            _lo, _hi = instance_hv_bounds(
+                load_instance("Mk%02d" % _i, os.path.join(ROOT, "data"), 42))
+            _b.append(_lo)
+        _wl = [x[1] for x in _b]
+        _ms = [x[0] for x in _b]
+        m("BndMinLoWl", "%.0f" % min(_wl))
+        m("BndMaxLoWl", "%.0f" % max(_wl))
+        m("BndWlSpan", "%.1f" % (max(_wl) / min(_wl)))
+        m("BndMsSpan", "%.1f" % (max(_ms) / min(_ms)))
+    except Exception:                       # 实例文件缺失时只写占位，绝不 raise
+        for _n, _v in (("BndMinLoWl", 0), ("BndMaxLoWl", 0),
+                       ("BndWlSpan", 0), ("BndMsSpan", 0)):
+            m(_n, _v)
+
     # —— §3 盒口径放大：正文的核心方法学数字，全部来自 caliber_audit 的落盘 ——
     # 注意口径：正文引用的 Spearman 是对 **log10(放大倍数)** 取的秩——
     # 不写出来就是个"未声明口径"的数字（对原始放大取秩只有 -0.25, p=0.076）。
@@ -1190,6 +1309,7 @@ def main():
     print("论文导出：logs/ -> paper/{tables,figures}")
     print("=" * 92)
     data = {}
+    fig_concept(data, args.allow_missing)   # §2 概念示意图（示意点，不读 logs/）
     data["instances"] = tab_instances(data, args.allow_missing)
     tab_ladder(data, args.allow_missing)
     fig_surface(data, args.allow_missing)

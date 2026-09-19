@@ -3142,5 +3142,61 @@ class TestPaperNumbersHaveOneSource(unittest.TestCase):
                         "SurfNonInitMax 为空，表注与正文会渲染成空")
 
 
+class TestPaperLayoutGuards(unittest.TestCase):
+    """交付判据与两栏排版的回归锁（2026-09-19）。
+
+    实测事故：`tab_hurink`（66 行单栏）比 A4 文本区高 517 pt、`tab_instances`
+    高 97 pt。LaTeX 对这种情况只发 "Float too large for page" 警告，
+    **不产生 Overfull \\hbox**，然后把浮体强行排出纸张。而当时的交付判据
+    只统计"超过 1000pt 的超宽"——三类告警里最危险的一类完全没被盯住。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        cls.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        spec = importlib.util.spec_from_file_location(
+            "_paper_build", os.path.join(cls.root, "paper", "build.py"))
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def _read(self, *parts):
+        with io.open(os.path.join(self.root, *parts), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_scan_log_catches_all_three_warning_classes(self):
+        """三类告警都要抓到——尤其是 Float too large（它不伴随 Overfull）。"""
+        log = ("Missing character: There is no X in font Y!\n"
+               "Overfull \\hbox (12.3pt too wide) in paragraph at lines 1--2\n"
+               "LaTeX Warning: Float too large for page by 517.04124pt on input line 79.\n")
+        miss, over, flt = self.mod.scan_log(log)
+        self.assertEqual(len(miss), 1)
+        self.assertEqual(len(over), 1)
+        self.assertEqual(len(flt), 1,
+                         "Float too large 必须被单独计数（它不同时产生 Overfull）")
+
+    def test_scan_log_clean_log_returns_empty(self):
+        miss, over, flt = self.mod.scan_log("note: Running TeX ...\n[1] [2]\n")
+        self.assertEqual((len(miss), len(over), len(flt)), (0, 0, 0))
+
+    def test_two_tall_tables_are_two_column(self):
+        """两个"比整页还高"的表必须保持两栏排版。"""
+        hur = self._read("paper", "tables", "tab_hurink.tex")
+        ins = self._read("paper", "tables", "tab_instances.tex")
+        self.assertIn("@{\\hspace", hur, "tab_hurink 不再是两栏排版（会溢出纸张）")
+        self.assertIn("@{\\hspace", ins, "tab_instances 不再是两栏排版（会溢出纸张）")
+        n_rows = len([l for l in hur.split("\n") if l.strip().startswith("Hed")])
+        self.assertLessEqual(n_rows, 40,
+                             "tab_hurink 行数回升到单栏水平（66 行会溢出纸张）")
+
+    def test_concept_figure_declares_it_is_not_experimental_data(self):
+        """概念图的 caption 必须声明它只是示意、不是实验结果。"""
+        tex = self._read("paper", "main.tex")
+        i = tex.find("\\label{fig:concept}")
+        self.assertGreater(i, 0, "概念图的 figure 环境不见了")
+        self.assertIn("非实验", tex[max(0, i - 900):i],
+                      "概念图没有声明非实验数据的性质，会被当成实验读数")
+
+
 if __name__ == "__main__":
     unittest.main()
