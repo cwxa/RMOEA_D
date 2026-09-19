@@ -138,7 +138,13 @@ def merge(merged_path, dry_run=False):
     rows.sort(key=lambda r: (str(r.get("instance")), str(r.get("label")),
                              r.get("seed", 0)))
     insts = sorted({r.get("instance") for r in rows if r.get("instance")})
-    print("合并 %d 个文件 -> %s" % (len(files), os.path.relpath(merged_path, ROOT)))
+    try:
+        shown = os.path.relpath(merged_path, ROOT)
+    except ValueError:
+        # 跨盘符时 relpath 会抛（例如把中间产物指到 C: 而仓库在 E:）。
+        # 这只影响一行显示，不该让整条流水线挂掉。
+        shown = merged_path
+    print("合并 %d 个文件 -> %s" % (len(files), shown))
     print("  行数 %d；实例 %d 个；重复键 %d 个" % (len(rows), len(insts), dup))
     if dup:
         print("  [!] 有重复键：上游可能有问题，别静默忽略")
@@ -146,6 +152,18 @@ def merge(merged_path, dry_run=False):
         with io.open(merged_path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(rows, fh, ensure_ascii=False)
     return rows, dup
+
+
+def merge_step(merged_path, dry_run=False):
+    """第 0 步的 rc 适配器。
+
+    **缺陷 35**：`merge()` 返回 `(rows, dup)` 二元组，而 `steps` 的约定是返回
+    rc（int）。第一版直接写 `lambda: merge(...)`，于是 `rc` 恒为非空元组、
+    真值恒为真 —— 每一次运行都会在第 0 步报"失败"退出，并且把整个 `rows`
+    （实测 7.5 MB）当作错误信息打印出来。合并本身其实一直是好的。
+    """
+    _rows, dup = merge(merged_path, dry_run)
+    return 1 if dup else 0
 
 
 def report_gate():
@@ -197,7 +215,7 @@ def main():
             return 1
 
     steps = [
-        (0, "合并", lambda: merge(merged, args.dry_run)),
+        (0, "合并", lambda: merge_step(merged, args.dry_run)),
         (1, "门控", lambda: run([PY, "scripts/aig_gating.py", "--labs", merged,
                                  "--data_dir", DATA,
                                  "--targets", "I_rand,I_mix3",

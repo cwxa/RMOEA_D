@@ -1,22 +1,28 @@
 % 本文件由 scripts/paper_export.py 现场生成，请勿手改。
 % 正文引用宏名而非字面数字：数字只有一个来源（缺陷 30）。
-\newcommand{\HKready}{0}
-\newcommand{\HKn}{0}
+\newcommand{\HKready}{1}
+\newcommand{\HKn}{66}
 \newcommand{\HKthr}{-1.0}
-\newcommand{\HKgain}{0}
-\newcommand{\HKtp}{0}
-\newcommand{\HKfp}{0}
-\newcommand{\HKfn}{0}
-\newcommand{\HKtn}{0}
-\newcommand{\HKaccDev}{0.0}
-\newcommand{\HKaccHold}{0.0}
-\newcommand{\HKlamLo}{0}
-\newcommand{\HKlamHi}{0}
-\newcommand{\HKnearHalf}{0}
-\newcommand{\HKholdPosN}{0}
-\newcommand{\HKholdPosLamLo}{0}
-\newcommand{\HKholdPosLamHi}{0}
-\newcommand{\HKverdict}{\textbf{（留出验证数据尚未生成。）}}
+\newcommand{\HKgain}{10}
+\newcommand{\HKtp}{3}
+\newcommand{\HKfp}{13}
+\newcommand{\HKfn}{7}
+\newcommand{\HKtn}{43}
+\newcommand{\HKaccHold}{0.70}
+\newcommand{\HKaccDev}{1.00}
+\newcommand{\HKlamLo}{-5.8}
+\newcommand{\HKlamHi}{+0.6}
+\newcommand{\HKholdPosN}{10}
+\newcommand{\HKholdPosLamLo}{-3.98}
+\newcommand{\HKholdPosLamHi}{-0.59}
+\newcommand{\HKnearBand}{0.5}
+\newcommand{\HKnearHalf}{15}
+\newcommand{\HKaccRejectAll}{0.85}
+\newcommand{\HKaccLiftAbs}{0.152}
+\newcommand{\HKpassN}{16}
+\newcommand{\HKpassPrec}{0.19}
+\newcommand{\HKrecall}{0.30}
+\newcommand{\HKverdict}{留出集上净增量显著为正的实例为 10/66（15.2\%），门控命中 3、误放 13、漏放 7，判对率 \HKaccHold。但留出集本身只有 15.2\% 的实例真赚，\textbf{一律拒绝}的判对率就有 \HKaccRejectAll —— 门控比它低 \HKaccLiftAbs，而门控放行的 \HKpassN 个实例里只有 3 个真赚（精确率 \HKpassPrec）。换言之，在这个分布上探针的判别力\textbf{低于不做任何判别}。 其中 15 个实例的 $\lam$ 落在门限 $\pm\HKnearBand$ 个百分点内——这一带在开发集上已被证明即使 30 seeds 也判不稳（\S\ref{sec:seedvar}），故判对率要连同它一起读。}
 \newcommand{\TgtAN}{10}
 \newcommand{\TgtAPosN}{10}
 \newcommand{\TgtASigN}{8}

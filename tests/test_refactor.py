@@ -15,6 +15,7 @@
 
 import sys
 import os
+import json
 import inspect
 import io
 import subprocess
@@ -2875,6 +2876,66 @@ class TestScriptCLIHelp(unittest.TestCase):
             capture_output=True, text=True, timeout=600)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(os.path.exists(out))
+
+
+class TestHurinkFinalizeStepContract(unittest.TestCase):
+    """缺陷 35：`hurink_finalize.py` 第 0 步的返回值必须是 rc(int)。
+
+    `merge()` 返回 `(rows, dup)`，第一版直接把它当 rc 用 —— 元组恒为真，
+    于是**每一次**运行都在第 0 步「失败」退出，还把整个 `rows`（实测 7.5 MB）
+    当错误信息打印出来。合并本身一直是好的，坏的是契约。
+    这类缺陷"编译能过、测试全绿、只在真跑时炸"，所以要机器锁住。
+    """
+
+    SCRIPTS = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+
+    def _load(self):
+        if self.SCRIPTS not in sys.path:
+            sys.path.insert(0, self.SCRIPTS)
+        import hurink_finalize as hf
+        return hf
+
+    @staticmethod
+    def _fake_logs(d, dup=False):
+        """造 2 个实例的 lab；dup=True 时第二个文件与第一个键完全相同。"""
+        first = [{"instance": "Hed01", "label": "I_rand", "seed": 42, "final_hv": 1.0}]
+        with io.open(os.path.join(d, "_hed01_init.json"), "w",
+                     encoding="utf-8") as fh:
+            json.dump(first, fh)
+        second = first if dup else [
+            {"instance": "Hed02", "label": "I_rand", "seed": 42, "final_hv": 2.0}]
+        with io.open(os.path.join(d, "_hed02_init.json"), "w",
+                     encoding="utf-8") as fh:
+            json.dump(second, fh)
+
+    def _run_step0(self, dup):
+        hf = self._load()
+        d = tempfile.mkdtemp()
+        old = hf.LOGS
+        try:
+            hf.LOGS = d
+            self._fake_logs(d, dup=dup)
+            return hf.merge_step(os.path.join(d, "merged.json"), dry_run=True)
+        finally:
+            hf.LOGS = old
+
+    def test_step0_returns_int_rc(self):
+        rc = self._run_step0(dup=False)
+        self.assertIsInstance(
+            rc, int,
+            "第 0 步必须返回 rc(int)；返回 (rows, dup) 元组会让它真值恒为真、"
+            "每次都误判失败（缺陷 35）")
+        self.assertEqual(rc, 0, "键无重复时 rc 应为 0")
+
+    def test_step0_flags_duplicate_keys(self):
+        self.assertEqual(self._run_step0(dup=True), 1, "有重复键必须报非零 rc")
+
+    def test_step0_goes_through_adapter(self):
+        hf = self._load()
+        src = inspect.getsource(hf.main)
+        self.assertIn("merge_step", src,
+                      "第 0 步必须走 merge_step 适配器，不能直接把 merge 当 rc")
 
 
 class TestPaperNumbersHaveOneSource(unittest.TestCase):

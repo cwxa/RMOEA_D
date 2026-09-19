@@ -633,8 +633,11 @@ def hurink_gate(data, allow_missing):
                "\\textbf{「显著为正」= $\\Delta$HV$>0$ 且配对 Wilcoxon $p<0.05$} —— "
                "不是「$\\Delta$HV$\\neq 0$」：两个实例集上都\\textbf{没有} $\\Delta$HV 精确为 0 的实例"
                "（开发集最小非零为 $-0.01\\%$），用非零当判据会把全部实例判成有增益。"
-               "留出集上显著为正的实例为 %d/%d，门控判对 %d/%d。"
-               % (n_gain, len(hold), agree, len(hold)))))
+               # 缺陷 36：这里**不能**对整段做 `%` 格式化 —— Python 的 `%` 不认
+               # 反斜杠转义，LaTeX 的 `\%` 会被当成格式符（`\%` 后跟 `$` 直接
+               # ValueError）。所以把两个计数单独格式化后再拼接。
+               "留出集上显著为正的实例为 " + ("%d/%d" % (n_gain, len(hold)))
+               + "，门控判对 " + ("%d/%d" % (agree, len(hold))) + "。")))
 
     # 门控混淆矩阵（开发 / 留出并排）
     write_tex("tab_gate.tex", table_wrap(
@@ -846,7 +849,10 @@ def write_macros(data, allow_missing, write=True):
                      ("HKtp", 0), ("HKfp", 0), ("HKfn", 0), ("HKtn", 0),
                      ("HKaccDev", 0.0), ("HKaccHold", 0.0),
                      ("HKlamLo", 0), ("HKlamHi", 0), ("HKnearHalf", 0),
-                     ("HKholdPosN", 0), ("HKholdPosLamLo", 0), ("HKholdPosLamHi", 0)):
+                     ("HKnearBand", 0.5),
+                     ("HKholdPosN", 0), ("HKholdPosLamLo", 0), ("HKholdPosLamHi", 0),
+                     ("HKaccRejectAll", 0), ("HKaccLiftAbs", 0), ("HKpassN", 0),
+                     ("HKpassPrec", "--"), ("HKrecall", "--")):
             m(n, v)
         m("HKverdict", "\\textbf{（留出验证数据尚未生成。）}")
     else:
@@ -883,19 +889,44 @@ def write_macros(data, allow_missing, write=True):
         # 贴着门限的实例数：§6 已证明这一带即使 30 seeds 也判不稳，
         # 所以留出集的判对率必须**连同"有多少实例落在决策边界附近"一起报**，
         # 否则"判对率低"会被误读成"探针无效"（实际是边界样本的固有不确定性）。
-        near = sum(1 for i in hk["lambda"] if abs(hk["lambda"][i] - hk["thr"]) <= 0.5)
+        # 决策边界带宽 ±0.5 个百分点。**不是** HKdevGap —— 后者是开发集两类实例的
+        # λ 间距（数值凑巧同为 0.5，语义完全不同），所以给它自己的宏，
+        # 免得正文里一个字面 0.5 同时被两边认领（守卫会报"两处来源"）。
+        NEAR_BAND = 0.5
+        m("HKnearBand", NEAR_BAND)
+        near = sum(1 for i in hk["lambda"]
+                   if abs(hk["lambda"][i] - hk["thr"]) <= NEAR_BAND)
         m("HKnearHalf", near)
-        tail = ("其中 %d 个实例的 $\\lam$ 落在门限 $\\pm0.5$ 个百分点内——"
+        tail = ("其中 %d 个实例的 $\\lam$ 落在门限 $\\pm\\HKnearBand$ 个百分点内——"
                 "这一带在开发集上已被证明即使 30 seeds 也判不稳"
                 "（\\S\\ref{sec:seedvar}），故判对率要连同它一起读。" % near)
         share = 100.0 * g / max(n, 1)
+        # 缺陷 37：判对率**必须与平凡基线并列报**。留出集 66 个实例里只有 g 个
+        # 真赚，所以"一律拒绝"的判对率 = (n-g)/n —— 它完全可能**高于**门控本身。
+        # 不报这一句，0.70 会被读成"尚可"；真相可能是"不如什么都不做"。
+        acc = (tp + hold.get("tn", 0)) / max(n, 1)
+        acc_rej = (n - g) / max(n, 1)
+        pass_n = tp + fp
+        m("HKaccRejectAll", "%.2f" % acc_rej)
+        m("HKaccLiftAbs", "%.3f" % abs(acc - acc_rej))
+        m("HKpassN", pass_n)
+        m("HKpassPrec", ("%.2f" % (tp / pass_n)) if pass_n else "--")
+        # 精确率之外还要给**召回**：漏放 (g-tp) 个真赚的实例在"判对率"里看不见，
+        # 但"该用的时候没用上"和"不该用的时候用了"一样会让方案失效。
+        m("HKrecall", ("%.2f" % (tp / g)) if g else "--")
         if g == 0:
             v = ("留出集上 MWR 的净增量\\textbf{一次也没有}达到显著（0/%d）："
                  "开发集上「少数实例显著为正」的形态在留出集上没有出现，"
                  "门控因此没有正例可判——它的适用边界比开发集暗示的要窄。" % n)
         else:
             v = ("留出集上净增量显著为正的实例为 %d/%d（%.1f\\%%），"
-                 "门控命中 %d、误放 %d、漏放 %d，判对率 \\HKaccHold。" % (g, n, share, tp, fp, fn))
+                 "门控命中 %d、误放 %d、漏放 %d，判对率 \\HKaccHold。"
+                 % (g, n, share, tp, fp, fn))
+            v += ("但留出集本身只有 %.1f\\%% 的实例真赚，\\textbf{一律拒绝}的判对率就有 "
+                  "\\HKaccRejectAll —— 门控比它低 \\HKaccLiftAbs，"
+                  "而门控放行的 \\HKpassN 个实例里只有 %d 个真赚（精确率 \\HKpassPrec）。"
+                  "换言之，在这个分布上探针的判别力\\textbf{低于不做任何判别}。"
+                  % (share, tp))
         m("HKverdict", v + " " + tail)
 
     # —— 目标 A / B 的区间与 Bonferroni 门槛（§4.3/§4.4）：原先手写 ——

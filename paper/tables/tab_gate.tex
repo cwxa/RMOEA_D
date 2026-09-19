@@ -1,12 +1,15 @@
 \begin{table}[t]
   \centering
-  \caption{零代门控的混淆矩阵}
+  \caption{零代门控的混淆矩阵（门限冻结在 $\lambda_0\ge-1.0\%$）}
   \label{tab:gate}
   \small
-  \begin{tabular}{lll}
+  \begin{tabular}{lrrrrrr}
     \toprule
-    \multicolumn{3}{l}{\textbf{留出验证数据尚未生成}}\\
+    集合 & $n$ & 命中 & 误放 & 漏放 & 正确拒绝 & 判对率 \\
+    \midrule
+    开发集 Mk01--Mk10 & 10 & 3 & 0 & 0 & 7 & 1.00 \\
+    留出集 Hurink $e$-data & 66 & 3 & 13 & 7 & 43 & 0.70 \\
     \bottomrule
   \end{tabular}
-  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}本表为占位：\texttt{logs/hurink\_aig.json} 未就绪。生成后由 \texttt{scripts/paper\_export.py} 覆盖。\end{minipage}
+  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}“命中”= 预测有增益且确实有；“误放”= 预测有而实际为 0；“漏放”= 预测没有而实际有。开发集是门限的标定集，只有留出集一列是无偏的。\end{minipage}
 \end{table}
