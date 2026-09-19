@@ -469,7 +469,11 @@ def tab_targets(data, allow_missing):
     bsig = [i for i in insts if is_gain(B[i]["dhv_rel_pct"], B[i]["p"])]
     bns = [i for i in insts if i not in bsig]
     _bns_pmin = min([B[i]["p"] for i in bns], default=1.0)
-    _bns_amax = max([abs(B[i]["dhv_rel_pct"]) for i in bns], default=0.0)
+    # 注意这里取的是"非显著实例中**为正**的最大 ΔHV"，**不是** |ΔHV| 的最大值：
+    # 后者是 Mk04 的 **−0.224%**（负值，当"增益"的反例毫无意义）。
+    # 这条论证要的是"确实有个小正数却不显著"，即 Mk05 的 +0.024%。
+    _bns_posmax = max([B[i]["dhv_rel_pct"] for i in bns
+                       if B[i]["dhv_rel_pct"] > 0], default=0.0)
     write_tex("tab_targets.tex", table_wrap(
         "同一批数据、两个目标量：目标 A（$I_{\\mathrm{mwr}}$ vs.\\ $I_{\\mathrm{rand}}$）与"
         "目标 B（$I_{\\mathrm{mwr}}$ vs.\\ $I_{\\mathrm{mix3}}$）",
@@ -485,12 +489,12 @@ def tab_targets(data, allow_missing):
                "目标 A 上 %d/%d 为正（“好起点”这一级确有普遍收益），"
                "但\\textbf{目标 B 只有 %d/%d 显著、其余 %d 个\\textbf{与 0 不可区分}}"
                "（配对 Wilcoxon $p\\ge%s$；注意 $\\Delta$HV 并非精确的 0，"
-               "最大者为 $%s\\%%$，故\"有增益\"必须按显著性而非非零来判）："
+               "非显著实例中仍为正的最大者是 $%s\\%%$，故\"有增益\"必须按显著性而非非零来判）："
                "MWR 的净增量是全有或全无，并非“普遍成立但幅度较小”。"
                "拿 A 的结论回答 B 的问题即为目标量错位（缺陷 26）。"
                % (len(apos), len(insts), len(bsig), len(insts), len(bns),
-                  ("%.2f" % _bns_pmin).lstrip("0"),
-                  num(_bns_amax).lstrip("+")))))
+                  "%.2f" % _bns_pmin,
+                  num(_bns_posmax, 3)))))
 
     fig, ax = plt.subplots(figsize=(3.4, 2.5))
     yy = np.arange(len(insts))
@@ -513,7 +517,7 @@ def tab_targets(data, allow_missing):
                        "Ap": {i: A[i]["p"] for i in insts},
                        "Bp": {i: B[i]["p"] for i in insts},
                        "a_pos": apos, "a_sig": asig, "b_sig": bsig, "b_nonsig": bns,
-                       "b_nonsig_pmin": _bns_pmin, "b_nonsig_absmax": _bns_amax,
+                       "b_nonsig_pmin": _bns_pmin, "b_nonsig_posmax": _bns_posmax,
                        "perm_B": tg["vs_I_mix3"].get("permutation", {})}
     return d
 
