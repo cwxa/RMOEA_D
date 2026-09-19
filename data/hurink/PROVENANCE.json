@@ -1,0 +1,1330 @@
+{
+ "Hed01": {
+  "chars": 530,
+  "local": "data/hurink/Hed01.fjs",
+  "sha256": "93b43c270bf43157727e9f7a4ad6bd437e11a508d917da95f4946d654a791337",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.167,
+   "flex_min": 1,
+   "n_jobs": 6,
+   "n_machines": 6,
+   "ops_per_job_max": 6,
+   "ops_per_job_min": 6,
+   "total_ops": 36
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata1.fjs",
+  "upstream_index": 1,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata1.fjs"
+ },
+ "Hed02": {
+  "chars": 1378,
+  "local": "data/hurink/Hed02.fjs",
+  "sha256": "9738e9f5fce398d60a3687ea779cbdc57aab0b4cbe583d592900e2ee9a7b4419",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata2.fjs",
+  "upstream_index": 2,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata2.fjs"
+ },
+ "Hed03": {
+  "chars": 1438,
+  "local": "data/hurink/Hed03.fjs",
+  "sha256": "fdc51bfae634f9c976c89db369da89e5a5b9ccf001202a2607a8a7762978e777",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata3.fjs",
+  "upstream_index": 3,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata3.fjs"
+ },
+ "Hed04": {
+  "chars": 754,
+  "local": "data/hurink/Hed04.fjs",
+  "sha256": "4f3868392e4a69eca2f5290805acf2dfd4481b0d411da31bd946be121c37b367",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.2,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 50
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata4.fjs",
+  "upstream_index": 4,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata4.fjs"
+ },
+ "Hed05": {
+  "chars": 754,
+  "local": "data/hurink/Hed05.fjs",
+  "sha256": "f717391d68a1cbfd147434a58956d0e1a7edc173974ce9b491e4b612b10f24d5",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.2,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 50
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata5.fjs",
+  "upstream_index": 5,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata5.fjs"
+ },
+ "Hed06": {
+  "chars": 746,
+  "local": "data/hurink/Hed06.fjs",
+  "sha256": "9abdc43ebcf9c1c81af54686e88a87bdd8edc36c9aca05014e78f5bbf48cf1db",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.18,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 50
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata6.fjs",
+  "upstream_index": 6,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata6.fjs"
+ },
+ "Hed07": {
+  "chars": 746,
+  "local": "data/hurink/Hed07.fjs",
+  "sha256": "74214f9cc9e38b852f3f23b6af17c7c26759848538bd8696ff7841ea34396ab9",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.18,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 50
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata7.fjs",
+  "upstream_index": 7,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata7.fjs"
+ },
+ "Hed08": {
+  "chars": 754,
+  "local": "data/hurink/Hed08.fjs",
+  "sha256": "63827d7dbc61bc6c095a572da6e85233be2869afae2aa0e3f2343a05debcc95e",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.2,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 50
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata8.fjs",
+  "upstream_index": 8,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata8.fjs"
+ },
+ "Hed09": {
+  "chars": 1092,
+  "local": "data/hurink/Hed09.fjs",
+  "sha256": "0ba6594d57fde21efac8ba493c17f763c22d0081b0f0410b768122b3f18bc879",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.147,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 75
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata9.fjs",
+  "upstream_index": 9,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata9.fjs"
+ },
+ "Hed10": {
+  "chars": 1092,
+  "local": "data/hurink/Hed10.fjs",
+  "sha256": "c3a5e7a06f7212ee4fedd3535e7c5fc77f99bc6876ae8bb0d04306dddc326df3",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.147,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 75
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata10.fjs",
+  "upstream_index": 10,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata10.fjs"
+ },
+ "Hed11": {
+  "chars": 1092,
+  "local": "data/hurink/Hed11.fjs",
+  "sha256": "0eb88ebc4b1ba26b0831d2d2cd44c5771e24719cfcd1d5576484991fbfcf41ef",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.147,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 75
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata11.fjs",
+  "upstream_index": 11,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata11.fjs"
+ },
+ "Hed12": {
+  "chars": 1092,
+  "local": "data/hurink/Hed12.fjs",
+  "sha256": "a2bf41ef928c3ecf2cbf8d24005c2598e44482f84554fbe81c71523bcec389dd",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.147,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 75
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata12.fjs",
+  "upstream_index": 12,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata12.fjs"
+ },
+ "Hed13": {
+  "chars": 1100,
+  "local": "data/hurink/Hed13.fjs",
+  "sha256": "d327b981794deb8828c7b4d3d64253a3e523e9c5b83ae6834313f90282f8d31e",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.16,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 75
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata13.fjs",
+  "upstream_index": 13,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata13.fjs"
+ },
+ "Hed14": {
+  "chars": 1438,
+  "local": "data/hurink/Hed14.fjs",
+  "sha256": "11990e936dd1f35b6da511243d8aeba257960a9e61d7b2c705c10d0bd5a8ba6f",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata14.fjs",
+  "upstream_index": 14,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata14.fjs"
+ },
+ "Hed15": {
+  "chars": 1446,
+  "local": "data/hurink/Hed15.fjs",
+  "sha256": "db923959b1bbcc8218dc677ddf77a0b745e3e990d82db57663f7c51da6a01450",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata15.fjs",
+  "upstream_index": 15,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata15.fjs"
+ },
+ "Hed16": {
+  "chars": 1446,
+  "local": "data/hurink/Hed16.fjs",
+  "sha256": "58143fde52e6683d669e684ac9d63c83ee8c8feafc25887a87815a787f794fa5",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata16.fjs",
+  "upstream_index": 16,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata16.fjs"
+ },
+ "Hed17": {
+  "chars": 1438,
+  "local": "data/hurink/Hed17.fjs",
+  "sha256": "dda68f1cd8c5723d2e783191985de7e14be8f010195223c58ccd64f5f798f48d",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata17.fjs",
+  "upstream_index": 17,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata17.fjs"
+ },
+ "Hed18": {
+  "chars": 1438,
+  "local": "data/hurink/Hed18.fjs",
+  "sha256": "ebd4b997d3f021d524ff48df621b89098eca005bd07d570ec52576f776b3fefa",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata18.fjs",
+  "upstream_index": 18,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata18.fjs"
+ },
+ "Hed19": {
+  "chars": 1378,
+  "local": "data/hurink/Hed19.fjs",
+  "sha256": "d0fee445bfb79ebb8e367c0877f43df72d2157325673d2c7d98d8f7300080ac5",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata19.fjs",
+  "upstream_index": 19,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata19.fjs"
+ },
+ "Hed20": {
+  "chars": 1378,
+  "local": "data/hurink/Hed20.fjs",
+  "sha256": "ce1ee579a8b37afe588a90233d42194b58c8c4c669b49d391e8a895f65eef2d5",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata20.fjs",
+  "upstream_index": 20,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata20.fjs"
+ },
+ "Hed21": {
+  "chars": 1378,
+  "local": "data/hurink/Hed21.fjs",
+  "sha256": "8461d9e29dd879cd86f9bae7fda1c16736dfd9d7f700df40c424b48302dbedda",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata21.fjs",
+  "upstream_index": 21,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata21.fjs"
+ },
+ "Hed22": {
+  "chars": 1378,
+  "local": "data/hurink/Hed22.fjs",
+  "sha256": "3d69f0e57f6dc164d31330a62fd06fa4527ca679921b663ad7bc89184994e8c6",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata22.fjs",
+  "upstream_index": 22,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata22.fjs"
+ },
+ "Hed23": {
+  "chars": 1378,
+  "local": "data/hurink/Hed23.fjs",
+  "sha256": "9e8797df1b561e38a997d67c958ec95b459e1501f6e485273167a6d773e4cd7a",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata23.fjs",
+  "upstream_index": 23,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata23.fjs"
+ },
+ "Hed24": {
+  "chars": 2088,
+  "local": "data/hurink/Hed24.fjs",
+  "sha256": "d04d9e98c322be7b06a574a88118f6755b07eea36367e0ddc0d1b1e3599d7b4c",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.153,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 150
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata24.fjs",
+  "upstream_index": 24,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata24.fjs"
+ },
+ "Hed25": {
+  "chars": 2088,
+  "local": "data/hurink/Hed25.fjs",
+  "sha256": "0c9a7e06eb54a01f0110338c0951d6a50cb4d4ea136391266eced7d3add31ea6",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.153,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 150
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata25.fjs",
+  "upstream_index": 25,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata25.fjs"
+ },
+ "Hed26": {
+  "chars": 2072,
+  "local": "data/hurink/Hed26.fjs",
+  "sha256": "a82b353bf491d519c05c0daa18aba495966d4d607c7104bebd3a2c030e620190",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 150
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata26.fjs",
+  "upstream_index": 26,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata26.fjs"
+ },
+ "Hed27": {
+  "chars": 2096,
+  "local": "data/hurink/Hed27.fjs",
+  "sha256": "6bbef0370a7fcfb62b7f5d6d246952e6b4095a1193ec21484dfbe7d214ae7582",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.16,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 150
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata27.fjs",
+  "upstream_index": 27,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata27.fjs"
+ },
+ "Hed28": {
+  "chars": 2096,
+  "local": "data/hurink/Hed28.fjs",
+  "sha256": "084cbe0323261be04dc211368667249755b83ff0e831aa3d110d4188a817e704",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.16,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 150
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata28.fjs",
+  "upstream_index": 28,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata28.fjs"
+ },
+ "Hed29": {
+  "chars": 2750,
+  "local": "data/hurink/Hed29.fjs",
+  "sha256": "b9841979d2b86c0677e315685e3bb6cbf7d013dde50e61d9d28a382a0b7c7b0c",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.135,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 200
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata29.fjs",
+  "upstream_index": 29,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata29.fjs"
+ },
+ "Hed30": {
+  "chars": 2750,
+  "local": "data/hurink/Hed30.fjs",
+  "sha256": "25b1dcfafaea36fa94e9c6176d4dfb414509c0ce3acc7f5745404e2f32fe628f",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.135,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 200
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata30.fjs",
+  "upstream_index": 30,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata30.fjs"
+ },
+ "Hed31": {
+  "chars": 2742,
+  "local": "data/hurink/Hed31.fjs",
+  "sha256": "315dd7af785fd9917ac349d0e247149f11def3a79d38c69ba05ec4ceaf26bfc3",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 200
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata31.fjs",
+  "upstream_index": 31,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata31.fjs"
+ },
+ "Hed32": {
+  "chars": 2750,
+  "local": "data/hurink/Hed32.fjs",
+  "sha256": "0e529b50efb389f131867300e6719cfb79b5a41d7fd3c826d0bb6d6731879919",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.135,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 200
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata32.fjs",
+  "upstream_index": 32,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata32.fjs"
+ },
+ "Hed33": {
+  "chars": 2750,
+  "local": "data/hurink/Hed33.fjs",
+  "sha256": "d45bc37fb9ffa9bc83a8f452ca67b1826a5b6df36a4e30613fb7fd5188122469",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.135,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 200
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata33.fjs",
+  "upstream_index": 33,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata33.fjs"
+ },
+ "Hed34": {
+  "chars": 4122,
+  "local": "data/hurink/Hed34.fjs",
+  "sha256": "3bbcbed6e6461dc84f22463f674a44b8123d0c84e9027da6d863f81750a0dd60",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.137,
+   "flex_min": 1,
+   "n_jobs": 30,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 300
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata34.fjs",
+  "upstream_index": 34,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata34.fjs"
+ },
+ "Hed35": {
+  "chars": 4122,
+  "local": "data/hurink/Hed35.fjs",
+  "sha256": "cc92fc4c440799973f5eadff3ab6030413d87d51dd65655d820d591605b7d075",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.137,
+   "flex_min": 1,
+   "n_jobs": 30,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 300
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata35.fjs",
+  "upstream_index": 35,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata35.fjs"
+ },
+ "Hed36": {
+  "chars": 4106,
+  "local": "data/hurink/Hed36.fjs",
+  "sha256": "f3eca0face7c957e942ff000b15c6a919f35ea644b05d70976c629078f71f0e3",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 30,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 300
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata36.fjs",
+  "upstream_index": 36,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata36.fjs"
+ },
+ "Hed37": {
+  "chars": 4106,
+  "local": "data/hurink/Hed37.fjs",
+  "sha256": "75578a1edb8b05a4ff139a2aae383252830926e06b1754506691b9b6d38755e6",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 30,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 300
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata37.fjs",
+  "upstream_index": 37,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata37.fjs"
+ },
+ "Hed38": {
+  "chars": 4106,
+  "local": "data/hurink/Hed38.fjs",
+  "sha256": "72eb3293849a338e73c6a960654a1e7a15f00916f610d601bef390f568db26fa",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 30,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 300
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata38.fjs",
+  "upstream_index": 38,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata38.fjs"
+ },
+ "Hed39": {
+  "chars": 3068,
+  "local": "data/hurink/Hed39.fjs",
+  "sha256": "7b7fe6b5d1ffe1164c2079c3af38fcfc5ec8b426ed080eb11eddfeae4e6e5247",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.147,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 15,
+   "ops_per_job_max": 15,
+   "ops_per_job_min": 15,
+   "total_ops": 225
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata39.fjs",
+  "upstream_index": 39,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata39.fjs"
+ },
+ "Hed40": {
+  "chars": 3068,
+  "local": "data/hurink/Hed40.fjs",
+  "sha256": "8b5e5740784de4a845d7777969d4638399b65a7028204e8762adc3b534be3916",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.147,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 15,
+   "ops_per_job_max": 15,
+   "ops_per_job_min": 15,
+   "total_ops": 225
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata40.fjs",
+  "upstream_index": 40,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata40.fjs"
+ },
+ "Hed41": {
+  "chars": 3060,
+  "local": "data/hurink/Hed41.fjs",
+  "sha256": "bda9a19d137f3bad602529a05348e99e60f089dacdd29271da2a65f56100f9fd",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.142,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 15,
+   "ops_per_job_max": 15,
+   "ops_per_job_min": 15,
+   "total_ops": 225
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata41.fjs",
+  "upstream_index": 41,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata41.fjs"
+ },
+ "Hed42": {
+  "chars": 3060,
+  "local": "data/hurink/Hed42.fjs",
+  "sha256": "468342fdfa60d16254d8d803eea8458d4ef50553c98dc784d32d69e87c134e61",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.142,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 15,
+   "ops_per_job_max": 15,
+   "ops_per_job_min": 15,
+   "total_ops": 225
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata42.fjs",
+  "upstream_index": 42,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata42.fjs"
+ },
+ "Hed43": {
+  "chars": 3068,
+  "local": "data/hurink/Hed43.fjs",
+  "sha256": "41ef86d4122d6e5c8cfbc81967c0616a38721af870ca86ebfc38d24c806ee46e",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.147,
+   "flex_min": 1,
+   "n_jobs": 15,
+   "n_machines": 15,
+   "ops_per_job_max": 15,
+   "ops_per_job_min": 15,
+   "total_ops": 225
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata43.fjs",
+  "upstream_index": 43,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata43.fjs"
+ },
+ "Hed44": {
+  "chars": 1378,
+  "local": "data/hurink/Hed44.fjs",
+  "sha256": "25cfcca2d050248500b2547d0665dfe7087181e0ab47e792d2d694a3560b0cc6",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata44.fjs",
+  "upstream_index": 44,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata44.fjs"
+ },
+ "Hed45": {
+  "chars": 1386,
+  "local": "data/hurink/Hed45.fjs",
+  "sha256": "4d7d4cd4d90f58e1fcdc0627b9dea067a4ba8a74a089a363d8d66179b4320466",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata45.fjs",
+  "upstream_index": 45,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata45.fjs"
+ },
+ "Hed46": {
+  "chars": 4046,
+  "local": "data/hurink/Hed46.fjs",
+  "sha256": "86d5200d9261e034f457da9e06edfc9f315f136fe3d6f5060b223a97f8b17feb",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 15,
+   "ops_per_job_max": 15,
+   "ops_per_job_min": 15,
+   "total_ops": 300
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata46.fjs",
+  "upstream_index": 46,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata46.fjs"
+ },
+ "Hed47": {
+  "chars": 4054,
+  "local": "data/hurink/Hed47.fjs",
+  "sha256": "ab430541de815378bffcdfbeaf6d869d038d049aae20eb8f1875e3e7e7a582cb",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.133,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 15,
+   "ops_per_job_max": 15,
+   "ops_per_job_min": 15,
+   "total_ops": 300
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata47.fjs",
+  "upstream_index": 47,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata47.fjs"
+ },
+ "Hed48": {
+  "chars": 4046,
+  "local": "data/hurink/Hed48.fjs",
+  "sha256": "e6e9ec31dfc07cfb967465b9d67ca651ad93ddf12394fabe72d77c558ea2df9a",
+  "shape": {
+   "flex_max": 3,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 20,
+   "n_machines": 15,
+   "ops_per_job_max": 15,
+   "ops_per_job_min": 15,
+   "total_ops": 300
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata48.fjs",
+  "upstream_index": 48,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata48.fjs"
+ },
+ "Hed49": {
+  "chars": 828,
+  "local": "data/hurink/Hed49.fjs",
+  "sha256": "a093f71f094db335f865dd9d2cdf14c73d54d54a9e47eb2068c2c895d70efed1",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.2,
+   "flex_min": 1,
+   "n_jobs": 11,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 55
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata49.fjs",
+  "upstream_index": 49,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata49.fjs"
+ },
+ "Hed50": {
+  "chars": 804,
+  "local": "data/hurink/Hed50.fjs",
+  "sha256": "e627681d63d69cf2ca612418f16e4e7398959bda9d601b3efa2df0e346ffa29d",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.212,
+   "flex_min": 1,
+   "n_jobs": 13,
+   "n_machines": 4,
+   "ops_per_job_max": 4,
+   "ops_per_job_min": 4,
+   "total_ops": 52
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata50.fjs",
+  "upstream_index": 50,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata50.fjs"
+ },
+ "Hed51": {
+  "chars": 894,
+  "local": "data/hurink/Hed51.fjs",
+  "sha256": "2cd0841f26ad42deba98e6bb8e6c17648b1fd62cfcc78bc38b30306644a24c07",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.183,
+   "flex_min": 1,
+   "n_jobs": 12,
+   "n_machines": 5,
+   "ops_per_job_max": 5,
+   "ops_per_job_min": 5,
+   "total_ops": 60
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata51.fjs",
+  "upstream_index": 51,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata51.fjs"
+ },
+ "Hed52": {
+  "chars": 858,
+  "local": "data/hurink/Hed52.fjs",
+  "sha256": "5a2def9a404712a9538963479616bd94ace907082bd17e559a5922cd025b2608",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.196,
+   "flex_min": 1,
+   "n_jobs": 14,
+   "n_machines": 4,
+   "ops_per_job_max": 4,
+   "ops_per_job_min": 4,
+   "total_ops": 56
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata52.fjs",
+  "upstream_index": 52,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata52.fjs"
+ },
+ "Hed53": {
+  "chars": 874,
+  "local": "data/hurink/Hed53.fjs",
+  "sha256": "0adcb393000fa38df927933e57fa846c981422a5bc3d1990b32f4d6f9dc00a5c",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.167,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 6,
+   "ops_per_job_max": 6,
+   "ops_per_job_min": 6,
+   "total_ops": 60
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata53.fjs",
+  "upstream_index": 53,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata53.fjs"
+ },
+ "Hed54": {
+  "chars": 1022,
+  "local": "data/hurink/Hed54.fjs",
+  "sha256": "37baec2edba5fc44a0f5abc90a1ba41792d16e02864c2413f7e4f79fa73f3c15",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.167,
+   "flex_min": 1,
+   "n_jobs": 8,
+   "n_machines": 9,
+   "ops_per_job_max": 9,
+   "ops_per_job_min": 9,
+   "total_ops": 72
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata54.fjs",
+  "upstream_index": 54,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata54.fjs"
+ },
+ "Hed55": {
+  "chars": 716,
+  "local": "data/hurink/Hed55.fjs",
+  "sha256": "b4262a782d40d83b6ad4ec398f6c359a75761b18891b9831e24ada801113ad7f",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.184,
+   "flex_min": 1,
+   "n_jobs": 7,
+   "n_machines": 7,
+   "ops_per_job_max": 7,
+   "ops_per_job_min": 7,
+   "total_ops": 49
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata55.fjs",
+  "upstream_index": 55,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata55.fjs"
+ },
+ "Hed56": {
+  "chars": 918,
+  "local": "data/hurink/Hed56.fjs",
+  "sha256": "0d8904b3c7bed280aebc9a16e5c0e71f23d2449af7e60f1b307e60d58d91de2a",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.172,
+   "flex_min": 1,
+   "n_jobs": 8,
+   "n_machines": 8,
+   "ops_per_job_max": 8,
+   "ops_per_job_min": 8,
+   "total_ops": 64
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata56.fjs",
+  "upstream_index": 56,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata56.fjs"
+ },
+ "Hed57": {
+  "chars": 1386,
+  "local": "data/hurink/Hed57.fjs",
+  "sha256": "789a2fdce882ee29682f9e2e635f117ec7bf695b9326ccf1d1d3aa184f8ffadc",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata57.fjs",
+  "upstream_index": 57,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata57.fjs"
+ },
+ "Hed58": {
+  "chars": 1378,
+  "local": "data/hurink/Hed58.fjs",
+  "sha256": "45bad2c65edcc8583ad44dd2c7d5a9906242aa32d9505093451145e085b0b3cc",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.13,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata58.fjs",
+  "upstream_index": 58,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata58.fjs"
+ },
+ "Hed59": {
+  "chars": 1386,
+  "local": "data/hurink/Hed59.fjs",
+  "sha256": "8abf3afe1c362b0c31fa2a14ba3cbb37db6ab675476ccba8fc340eb6541d7b40",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata59.fjs",
+  "upstream_index": 59,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata59.fjs"
+ },
+ "Hed60": {
+  "chars": 1386,
+  "local": "data/hurink/Hed60.fjs",
+  "sha256": "662d0fc6df43ab199e29bc4bd8aeb263d33fa76f1156f857a19790f51d59c8a7",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata60.fjs",
+  "upstream_index": 60,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata60.fjs"
+ },
+ "Hed61": {
+  "chars": 1386,
+  "local": "data/hurink/Hed61.fjs",
+  "sha256": "00b5eca7654c22dce7b01835a4b74d82f3cf2694892a4b4278dc144863cdf5f7",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata61.fjs",
+  "upstream_index": 61,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata61.fjs"
+ },
+ "Hed62": {
+  "chars": 1386,
+  "local": "data/hurink/Hed62.fjs",
+  "sha256": "5d307d005e540176a4069717284f349cf1e9bd9dfdbe2b3016904f1bddf11715",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata62.fjs",
+  "upstream_index": 62,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata62.fjs"
+ },
+ "Hed63": {
+  "chars": 1368,
+  "local": "data/hurink/Hed63.fjs",
+  "sha256": "adf25872c7194028ac6fd70423a512641d8077f526ed37678ceabfe8a57b2da1",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.131,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 9,
+   "total_ops": 99
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata63.fjs",
+  "upstream_index": 63,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata63.fjs"
+ },
+ "Hed64": {
+  "chars": 1386,
+  "local": "data/hurink/Hed64.fjs",
+  "sha256": "d164b1e6e5fb470a1d55b3121900d510712fb0a835642c0991e5555ba845072d",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata64.fjs",
+  "upstream_index": 64,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata64.fjs"
+ },
+ "Hed65": {
+  "chars": 1386,
+  "local": "data/hurink/Hed65.fjs",
+  "sha256": "547a241324f1e37304c38c1b7ad34b0c465cc824b17b3daaf9c9ba0177bed6d5",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata65.fjs",
+  "upstream_index": 65,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata65.fjs"
+ },
+ "Hed66": {
+  "chars": 1386,
+  "local": "data/hurink/Hed66.fjs",
+  "sha256": "88f6f2c5fcd079aa0c4e70f0d09ba193215c8748b722a8230f80f6a14c688a9b",
+  "shape": {
+   "flex_max": 2,
+   "flex_mean": 1.14,
+   "flex_min": 1,
+   "n_jobs": 10,
+   "n_machines": 10,
+   "ops_per_job_max": 10,
+   "ops_per_job_min": 10,
+   "total_ops": 100
+  },
+  "subset": "edata",
+  "upstream_dir": "2b_Hurink_edata",
+  "upstream_file": "HurinkEdata66.fjs",
+  "upstream_index": 66,
+  "url": "https://raw.githubusercontent.com/Lei-Kun/FJSP-benchmarks/main/2b_Hurink_edata/HurinkEdata66.fjs"
+ },
+ "_meta": {
+  "fetched_at": "2026-09-18 22:56:07",
+  "n_instances": 66,
+  "note": "确定时间的标准 FJSP 实例；模糊加工时间由 rmoea_d.core.instance.parse_fjs 用与 Mk01-Mk10 完全相同的规则生成",
+  "reference": "Kun Lei et al., Expert Systems with Applications 205 (2022) 117796",
+  "source": "https://github.com/Lei-Kun/FJSP-benchmarks",
+  "upstream_instances": "Hurink, Jurisch & Thole (1994), 66 instances x 4 flexibility levels (sdata/rdata/edata/vdata)"
+ }
+}

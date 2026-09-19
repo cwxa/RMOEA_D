@@ -302,8 +302,17 @@ def fig2_init_variants():
     ax.set_title("(b) 相对 MIX3 的净增益  (Wilcoxon 配对, n=30)")
     ph.style_ax(ax)
 
+    # 数字从 `rows` 现场取（曾把 `+8.64%***` 写死在标题里 —— 报告改了图没改）。
+    # 抓不到就**报错**，不许退回写死数字。
+    _mwr = [r for r in rows if r[0] == "I_mwr"]
+    if not _mwr:
+        raise RuntimeError("02_init_variants: rows 里没有 I_mwr，"
+                           "无法标注 OS-MWR 的效应（不要退回写死数字）")
+    _m, _p = _mwr[0][1], _mwr[0][2]
+    _st = "***" if _p < 0.001 else "**" if _p < 0.01 else "*" if _p < 0.05 else "n.s."
     fig.suptitle("初始化变体扫描（Mk10 开发集）：MIX3 的三条分支从未动过 OS 维度；"
-                 "OS-MWR 在此集上 +8.64%***，但留出集判负（见 03）",
+                 "OS-MWR 在此集上 %+.2f%% %s，但 Mk07/Mk09 上 n.s.（见 03）"
+                 % (_m, _st),
                  fontsize=12.5, fontweight="bold", y=1.03)
     ph.source_footer(fig, "logs/_mk10_init.json + _mk10_lab.json")
     _save(fig, "02_init_variants.png")
@@ -337,6 +346,7 @@ def fig3_holdout_forest():
     colors = ["#2166AC", "#D6604D", "#4DAF4A"]
     offs = np.linspace(-0.24, 0.24, len(tags))
 
+    stat = {}
     for k, tag in enumerate(tags):
         hv = tables[tag]
         for i, a in enumerate(arms):
@@ -348,6 +358,7 @@ def fig3_holdout_forest():
             se = d.std(ddof=1) / np.sqrt(len(d))
             ci = 1.96 * se
             p = float(stats.wilcoxon(va, vb)[1])
+            stat[(tag, a)] = (m, p)
             yy = i + offs[k]
             ax.errorbar(m, yy, xerr=ci, fmt="o", ms=6, capsize=3,
                         color=colors[k], ecolor=colors[k],
@@ -357,16 +368,41 @@ def fig3_holdout_forest():
             ax.text(m + ci + 0.35, yy, "%+.2f%% %s" % (m, star), va="center",
                     fontsize=7.5, color=colors[k])
     ax.axvline(0, color="#616161", lw=1.2)
+    # 标注文字是 ax.text，**不参与自动缩放**，默认 xlim 会把最右的 "+8.64% ***" 切掉，
+    # 且 lower-right 图例正好压在同一行上。显式留白 + 图例移到左下空白区。
+    _xs = [stat[(t, a)][0] for t in tags for a in arms]
+    ax.set_xlim(min(_xs) - 6, max(_xs) + 5)
     ax.set_yticks(range(len(arms)))
     ax.set_yticklabels([VARIANT_LABEL[a] for a in arms], fontsize=9.5)
     ax.set_xlabel("相对 MIX3 的 HV 变化 (%)   [点=均值, 线=95%CI]")
-    ax.set_title("留出集确认：符号跨实例一致，但幅度塌陷 → 不构成普适改进\n"
-                 "OS-MWR：Mk10 +8.64%*** → Mk07 +0.34% n.s. → Mk09 +0.30% n.s."
-                 "（方向 3/3 同号，幅度差 25×；增益是 Mk10 特有的）", fontsize=11.5)
-    ax.legend(framealpha=0.9, loc="lower right")
+    # 标题数字从 `stat` 现场取（**不写死**）：这里原先写死了
+    # `+8.64% / +0.34% / +0.30%`，并据此下了"增益是 Mk10 特有的"这个结论 ——
+    # 该结论**已被推翻**（Mk06/Mk08 从未调参却样本外复现，见优化报告 §2.5）。
+    # 抓不到数据就报错，不退回写死数字。
+    _key = "I_mwr"
+    if not all((t, _key) in stat for t in tags):
+        raise RuntimeError("03_holdout_forest: 缺 I_mwr，无法标注效应"
+                           "（不要退回写死数字）")
+    _parts, _abs = [], []
+    for t in tags:
+        _m, _p = stat[(t, _key)]
+        _st = "***" if _p < 0.001 else "**" if _p < 0.01 else "*" if _p < 0.05 else "n.s."
+        _parts.append("%s %+.2f%% %s" % (t, _m, _st))
+        _abs.append(abs(_m))
+    _span = max(_abs) / max(min(_abs), 1e-9)
+    _title = ("同一初始化变体在三实例上的落差：幅度不可移植（非普适）\n"
+              "OS-MWR：" + " → ".join(_parts)
+              + ("（幅度差 %.0f×）\n" % _span)
+              + "但 Mk06/Mk08 从未调参即样本外复现 -> 也不是 Mk10 独有（报告 §2.5）")
+    ax.set_title(_title, fontsize=11.5)
+    ax.legend(framealpha=0.9, loc="lower left")
     ax.invert_yaxis()
     ph.style_ax(ax)
-    ph.source_footer(fig, "_mk{10,07,09}_init.json（相对差与盒无关）")
+    # 口径必须写出来：这是**归一化盒口径**（盒由 CONTEXT_ARMS 构造），与实例边界口径
+    # 给出的数字不同（Mk10 上 +8.64% vs +0.690%）。这里原先写的是"相对差与盒无关"，
+    # 按缺陷 25 那是错的 —— 相对差同样随口径变。
+    ph.source_footer(fig, "_mk{10,07,09}_init.json；归一化盒口径（盒 = CONTEXT_ARMS,"
+                          "%d 臂）≠ 实例边界口径（缺陷 25）" % len(CONTEXT_ARMS))
     _save(fig, "03_holdout_forest.png")
 
 

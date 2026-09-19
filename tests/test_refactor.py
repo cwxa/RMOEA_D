@@ -16,6 +16,7 @@
 import sys
 import os
 import inspect
+import io
 import subprocess
 import tempfile
 import unittest
@@ -2697,6 +2698,137 @@ class TestAIGTargets(unittest.TestCase):
         self.assertIsNotNone(loo)
 
 
+class TestGateGainCriterion(unittest.TestCase):
+    """缺陷 29 回归锁：「有净增量」必须是**统计显著为正**，不是"浮点非零"。
+
+    形态：`paper_export.hurink_gate` 原先用 `abs(ΔHV) > 1e-9` 判"有增益"。
+    Mk 与 Hurink 上**都没有 ΔHV 精确为 0 的实例**（Mk 最小非零是 Mk07 −0.0090%），
+    于是开发集 10/10 被判成"有增益"、门控判对率从 **1.00 掉到 0.30**；
+    留出集上更会把全部实例判成有增益、门控表彻底失效。
+    这个错误**不会报任何异常**，只会静默出一张错表 —— 所以必须钉住。
+    """
+
+    @staticmethod
+    def _m():
+        import importlib
+        _d = os.path.join(os.path.dirname(__file__), '..', 'scripts')
+        if _d not in sys.path:
+            sys.path.insert(0, _d)
+        return importlib.import_module("paper_export")
+
+    def test_tiny_nonzero_effect_is_not_a_gain(self):
+        """真实数值：Mk07 −0.0090%/p=1.000 与 Mk05 +0.0240%/p=1.000 都是非零，但都不算增益。"""
+        m = self._m()
+        self.assertFalse(m.is_gain(-0.0090, 1.000), "微小非零被误判成增益（旧 `>1e-9` 判据）")
+        self.assertFalse(m.is_gain(0.0240, 1.000), "微小非零被误判成增益（旧 `>1e-9` 判据）")
+
+    def test_real_gain_and_direction(self):
+        """Mk06 +0.7303%/p=2e-11 是增益；显著为负不是增益；方向必须为正。"""
+        m = self._m()
+        self.assertTrue(m.is_gain(0.7303, 2e-11))
+        self.assertFalse(m.is_gain(-0.7303, 2e-11), "显著为负不能算「有增益」")
+        self.assertFalse(m.is_gain(0.5, m.GAIN_P), "p 必须严格小于阈值")
+        self.assertFalse(m.is_gain(None, 1e-9))
+        self.assertFalse(m.is_gain(0.5, None))
+
+    def test_gate_actually_calls_is_gain(self):
+        """端到端接线：hurink_gate / fig_gate 必须真的调用 is_gain。
+
+        缺陷 18 的形态正是"helper 写了、调用方没接"——只测 helper 会漏掉这一类。
+        """
+        m = self._m()
+        for fn in (m.hurink_gate, m.fig_gate):
+            src = inspect.getsource(fn)
+            self.assertIn("is_gain(", src, "%s 没有接上 is_gain" % fn.__name__)
+            self.assertNotIn("> 1e-9", src,
+                             "%s 里还留着「浮点非零」判据" % fn.__name__)
+
+    def test_dev_confusion_matrix_is_perfect_under_the_fixed_criterion(self):
+        """用仓库里现成的 logs 复核开发集：修正判据 -> tp=3, fp=0, fn=0, tn=7（判对率 1.00）。
+
+        logs 缺失时跳过（数据不是代码的一部分，不能因为它不在就判失败）。
+        """
+        m = self._m()
+        pa = os.path.join(os.path.dirname(__file__), '..', 'logs', 'aig_gating.json')
+        pp = os.path.join(os.path.dirname(__file__), '..', 'logs', 'init_probe.json')
+        if not (os.path.exists(pa) and os.path.exists(pp)):
+            self.skipTest("缺 logs/aig_gating.json 或 logs/init_probe.json")
+        import collections
+        import json
+        with open(pa, encoding="utf-8") as fh:
+            aig = json.load(fh)
+        with open(pp, encoding="utf-8") as fh:
+            prb = json.load(fh)
+        T = {r["instance"]: r for r in aig["targets"]["vs_I_mix3"]["per_instance"]}
+        L = {r["instance"]: r["probe_init_hv_lever_pct"] for r in prb["probe"]}
+        c = collections.Counter()
+        for i in L:
+            gain = m.is_gain(T[i]["dhv_rel_pct"], T[i]["p"])
+            pred = L[i] >= -1.0
+            c["tp" if (pred and gain) else "fp" if pred else
+              "fn" if gain else "tn"] += 1
+        self.assertEqual((c["tp"], c["fp"], c["fn"], c["tn"]), (3, 0, 0, 7),
+                         "开发集门控矩阵与文档记载不一致：%s" % dict(c))
+        self.assertEqual(sorted(i for i in L if L[i] >= -1.0),
+                         ["Mk06", "Mk08", "Mk10"])
+
+
+class TestTexOutputIsClean(unittest.TestCase):
+    """缺陷 31 回归锁：生成的 .tex 里不许有控制字符。
+
+    形态：Python 普通字符串里 `\\t` 是 TAB、`\\f` 是换页符。把 `"\\footnotesize"` /
+    `"\\textbf{...}"` 写成单反斜杠**不报错**，静默产出 `<FF>ootnotesize` 与
+    `<TAB>extbf{...}` —— `ast.parse` 过、TECTONIC 编译过、缺字告警为 0，
+    但 PDF 上直接排出 "ootnotesize"、"extbf{逐实例}" 这类垃圾文本。
+    2026-09-19 实测 **6 张表全中**（`tab_ladder` 的 `\\footnotesize` 失效还顺带
+    让它超出页面 84.6pt），所以必须在写盘前与编译前各拦一次。
+    """
+
+    @staticmethod
+    def _m():
+        import importlib
+        _d = os.path.join(os.path.dirname(__file__), '..', 'scripts')
+        if _d not in sys.path:
+            sys.path.insert(0, _d)
+        return importlib.import_module("paper_export")
+
+    CTRL = "\t\f\r\v\a\b\0"
+
+    def test_write_tex_rejects_control_chars(self):
+        """写盘守卫必须有区分度：带 TAB/FF/CR 的内容一律拒绝，且不留残文件。"""
+        m = self._m()
+        tabs = os.path.join(os.path.dirname(__file__), '..', 'paper', 'tables')
+        probe = os.path.join(tabs, "_should_never_exist.tex")
+        for ch in ("\t", "\f", "\r"):
+            with self.assertRaises(SystemExit, msg="控制字符 %r 没被拦住" % ch):
+                m.write_tex("_should_never_exist.tex", "x%sy" % ch)
+        self.assertFalse(os.path.exists(probe),
+                         "被拒绝的内容不该落盘（否则守卫只是报警，不是拦截）")
+
+    def test_table_wrap_output_has_no_control_chars(self):
+        m = self._m()
+        t = m.table_wrap("标题", "tab:x", "    a & b \\\\", "ll",
+                         notes="注：\\textbf{粗体} 与 \\texttt{code}。")
+        bad = [c for c in t if c in self.CTRL]
+        self.assertEqual(bad, [], "table_wrap 输出含控制字符 %r" % bad)
+        # font 默认值必须真的是 \small 命令，而不是被吃成控制字符 + "mall"
+        self.assertIn("\\small", t)
+
+    def test_repo_tables_are_clean(self):
+        """端到端：仓库里现成的 paper/tables/*.tex 必须干净（表不在就跳过）。"""
+        import glob
+        d = os.path.join(os.path.dirname(__file__), '..', 'paper', 'tables')
+        files = sorted(glob.glob(os.path.join(d, "*.tex")))
+        if not files:
+            self.skipTest("paper/tables 下没有产物")
+        for f in files:
+            src = io.open(f, encoding="utf-8").read()
+            bad = sorted({c for c in src if c in self.CTRL})
+            self.assertEqual(bad, [], "%s 含控制字符 %r"
+                             % (os.path.basename(f),
+                                ["U+%04X" % ord(c) for c in bad]))
+
+
 class TestScriptCLIHelp(unittest.TestCase):
     """缺陷 19（文档命令未实测）/ 27（argparse help 里的裸 `%` 直接崩）的机器化锁。
 
@@ -2743,6 +2875,210 @@ class TestScriptCLIHelp(unittest.TestCase):
             capture_output=True, text=True, timeout=600)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(os.path.exists(out))
+
+
+class TestPaperNumbersHaveOneSource(unittest.TestCase):
+    """缺陷 30 系列回归锁：**正文数字必须来自数据**，且生成的 .tex 必须真能被 TeX 吃下。
+
+    已发生过的三个形态（都不是笔误，而是"不做机械比对就发现不了"的坑）：
+
+    (a) 正文手写的数字与表格漂移：论文 §5 把 ``rho=+0.83`` 归给式 (2) 定义的 probe，
+        而 0.83 实际属于另一个事前量（平均 makespan 杠杆），probe 自己是 0.77 ——
+        两个数**都真实存在**，肉眼怎么看都对。
+    (b) 宏名带数字：``\\NullP95`` 被 TeX 读成 ``\\NullP`` 紧跟 ``95``，
+        报 ``Missing number, treated as zero.`` —— **不报"名字非法"**，
+        而且行号指向名字的**前一行**，排查方向被完全带偏。
+    (c) 中文出现在 preamble 里的宏体中 → XeTeX 报 ``Missing \\begin{document}``。
+
+    所以锁三件事：正文无字面副本、(b)/（c) 的机器守卫、以及 §hurink 必须有正文
+    （曾经只剩 \\input 两张占位表，整节没有一句解释）。
+    """
+
+    BS = chr(92)
+
+    @staticmethod
+    def _m():
+        import importlib
+        _d = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        if _d not in sys.path:
+            sys.path.insert(0, _d)
+        return importlib.import_module("paper_export")
+
+    @staticmethod
+    def _paper():
+        return os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "paper")
+
+    # ---- (b) 宏名只能是字母：守卫必须有区分度 ----
+    def test_macro_name_with_digit_is_rejected(self):
+        m = self._m()
+        for bad in ("NullP95", "PSmk9Lam", "CalibAmpD2D1", "A2B"):
+            with self.assertRaises(SystemExit, msg="宏名 %r 竟被放行" % bad):
+                m.tex_macro_line(bad, 1)
+        good = m.tex_macro_line("NullPct", 1)
+        self.assertEqual(good, self.BS + "newcommand{" + self.BS + "NullPct}{1}")
+
+    def test_repo_macros_names_are_tex_legal(self):
+        """端到端：仓库里现成的 macros.tex 名字必须全是字母（产物不在就跳过）。
+
+        故意不用正则解析：本文件要写进 Python 源码的反斜杠会经过工具层，
+        用字符串拼接（self.BS）比正则转义更不容易写错。
+        """
+        p = os.path.join(self._paper(), "tables", "macros.tex")
+        if not os.path.exists(p):
+            self.skipTest("paper/tables/macros.tex 不存在")
+        head = self.BS + "newcommand" + "{"
+        names = []
+        for line in io.open(p, encoding="utf-8"):
+            s = line.strip()
+            if s.startswith(head):
+                # 行形如 "\\newcommand{\\HKready}{0}"：split("{")[1] 是 "\\HKready}"
+                names.append(s.split("{")[1].split("}")[0].lstrip(self.BS))
+        self.assertGreater(len(names), 10, "没解析到宏名，产物结构变了")
+        bad = [n for n in names if not n.isalpha()]
+        self.assertEqual(bad, [], "这些宏名含非字母字符，TeX 会解析错：%r" % bad)
+
+    # ---- (a) 正文里不许有已宏化数字的字面副本 ----
+    def test_main_tex_has_no_duplicated_literals(self):
+        sc = os.path.join(os.path.dirname(__file__), "..", "scripts",
+                          "check_paper_literals.py")
+        if not os.path.exists(sc):
+            self.skipTest("check_paper_literals.py 不存在")
+        r = subprocess.run([sys.executable, sc], capture_output=True, text=True,
+                           timeout=300)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    # ---- §hurink 必须有正文，不能只剩 \input ----
+    def test_hurink_section_has_prose_body(self):
+        p = os.path.join(self._paper(), "main.tex")
+        if not os.path.exists(p):
+            self.skipTest("paper/main.tex 不存在")
+        src = io.open(p, encoding="utf-8").read()
+        i = src.find(self.BS + "section{独立留出验证")
+        self.assertGreater(i, 0, "找不到留出验证一节")
+        j = src.find(self.BS + "input{", i)
+        self.assertGreater(j, i, "该节里没有 input，结构变了")
+        # 统计"解释性文字"：去掉 LaTeX 命令名（反斜杠+字母）、注释行与空白后
+        # 仍应有足够字符——只剩两条 \input 占位表就是这里的失败形态。
+        txt, k, body = [], 0, "\n".join(
+            ln for ln in src[i:j].splitlines() if not ln.strip().startswith("%"))
+        while k < len(body):
+            if body[k] == self.BS:
+                k += 1
+                while k < len(body) and body[k].isalpha():
+                    k += 1
+                continue
+            if not body[k].isspace() and body[k] not in "{}[]$":
+                txt.append(body[k])
+            k += 1
+        self.assertGreater(len(txt), 150,
+                           "留出验证一节没有正文——只剩占位表就无法解释结果")
+
+    # ---- 结论句按数据分支：两种形态都要出得来且不崩 ----
+    def _fake(self, n_gain, hold):
+        lam = {"Hed01": -0.5, "Hed02": -3.0}
+        gain = {"Hed01": bool(n_gain), "Hed02": False}
+        return {"hurink": {"n": 2, "n_gain": n_gain, "thr": -1.0,
+                           "dev": {"tp": 3, "fp": 0, "fn": 0, "tn": 7},
+                           "hold": hold, "agree": hold.get("tp", 0) + hold.get("tn", 0),
+                           "lambda": lam, "gain": gain}}
+
+    def test_verdict_reports_zero_gain_branch(self):
+        m = self._m()
+        lines = m.write_macros(self._fake(0, {"tp": 0, "fp": 0, "fn": 0, "tn": 2}),
+                               False, write=False)
+        v = [l for l in lines if "HKverdict" in l][0]
+        self.assertIn("一次也没有", v)
+        self.assertIn("\\textbf", v)
+        bad = [c for c in v if c in "\t\f\r\v"]
+        self.assertEqual(bad, [])
+
+    def test_verdict_reports_counts_when_gain_exists(self):
+        m = self._m()
+        lines = m.write_macros(self._fake(1, {"tp": 1, "fp": 0, "fn": 0, "tn": 1}),
+                               False, write=False)
+        v = [l for l in lines if "HKverdict" in l][0]
+        self.assertIn("1/2", v, "有增益时必须报出计数而不是笼统措辞")
+        self.assertNotIn("一次也没有", v)
+
+    def test_macros_written_without_write_flag(self):
+        """write=False 不许碰磁盘——测试用它，避免污染真产物。"""
+        m = self._m()
+        fp = os.path.join(self._paper(), "tables", "macros.tex")
+        before = io.open(fp, encoding="utf-8").read() if os.path.exists(fp) else None
+        m.write_macros(self._fake(0, {"tp": 0, "fp": 0, "fn": 0, "tn": 2}),
+                       False, write=False)
+        after = io.open(fp, encoding="utf-8").read() if os.path.exists(fp) else None
+        self.assertEqual(before, after, "write=False 竟然改了产物")
+
+    # ---- 阶梯 / 响应面：正文数字必须与生成的表格**同源** ----
+    #
+    # 这两个是 2026-09-19 第二次复核查出的"缺陷 32 同类"形态：正文 §4.1 的
+    # `+3.41% / +0.42% / +0.08% / +0.03% / -0.003%` 与 §4.2 的
+    # `0.024/0.064/0.091 → 0.0010/0.0028/0.0085` 全是**手写**，
+    # 而 tab_ladder.tex / tab_surface.tex 是现场生成的 —— 两处来源，今天恰好一致。
+    # 下面的锁把它们钉在同一份 `logs/` 上：改数据只改一处。
+    @staticmethod
+    def _macro_values(path):
+        out = {}
+        for line in io.open(path, encoding="utf-8"):
+            s = line.strip()
+            if s.startswith(chr(92) + "newcommand{"):
+                name = s.split("{")[1].split("}")[0].lstrip(chr(92))
+                out[name] = s[s.index("}{") + 2:-1]
+        return out
+
+    @staticmethod
+    def _rows(path):
+        rows = {}
+        for line in io.open(path, encoding="utf-8"):
+            if "&" not in line:
+                continue
+            cells = [c.strip() for c in line.split("&")]
+            rows[cells[0].replace("$|$", "|")] = cells
+        return rows
+
+    def test_ladder_macros_agree_with_generated_table(self):
+        d = self._paper()
+        mp = os.path.join(d, "tables", "macros.tex")
+        tp = os.path.join(d, "tables", "tab_ladder.tex")
+        if not (os.path.exists(mp) and os.path.exists(tp)):
+            self.skipTest("论文产物未生成（先跑 scripts/paper_export.py）")
+        import re
+        mac, rows = self._macro_values(mp), self._rows(tp)
+        pairs = (("LadderMixRel", "D2|D1"), ("LadderVnsRel", "D3|D2"),
+                 ("LadderQpasRel", "D4|D3"), ("LadderEliteRel", "D5|D4"),
+                 ("LadderRlRel", "RMOEAD|D5"))
+        for name, key in pairs:
+            self.assertIn(name, mac, "宏 %s 缺失：正文 §4.1 会渲染成空" % name)
+            self.assertIn(key, rows, "tab_ladder 里找不到 %s 行" % key)
+            nums = [float(t) for t in re.findall(r"[+-]?\d+\.\d+", rows[key][2])]
+            self.assertTrue(
+                any(abs(float(mac[name]) - v) < 5e-4 for v in nums),
+                "%s = %s 与表行 %s 第三列 %r 对不上（正文与表格不同源）"
+                % (name, mac[name], key, rows[key][2]))
+
+    def test_surface_macros_agree_with_generated_table(self):
+        d = self._paper()
+        mp = os.path.join(d, "tables", "macros.tex")
+        tp = os.path.join(d, "tables", "tab_surface.tex")
+        if not (os.path.exists(mp) and os.path.exists(tp)):
+            self.skipTest("论文产物未生成（先跑 scripts/paper_export.py）")
+        import re
+        mac, rows = self._macro_values(mp), self._rows(tp)
+        self.assertIn("D2|D1", rows)
+        end = [float(t) for t in re.findall(r"[+-]?\d+\.\d+", " ".join(rows["D2|D1"][2:]))]
+        # 表格是 3 位小数、宏是 4 位小数 → 容差取表末位的半格
+        for name in ("SurfInitEndA", "SurfInitEndB", "SurfInitEndC"):
+            self.assertIn(name, mac, "宏 %s 缺失：正文 §4.2 会渲染成空" % name)
+            self.assertTrue(any(abs(float(mac[name]) - v) < 1e-3 for v in end),
+                            "%s = %s 与表行对不上" % (name, mac[name]))
+        # 衰减倍数必须 > 1（否则"显著衰减"这句话不成立）
+        self.assertGreater(float(mac["SurfDecayHi"]), 1.0)
+        self.assertGreaterEqual(float(mac["SurfDecayHi"]), float(mac["SurfDecayLo"]))
+        # 表注里那个"最大者"文本必须含 ```\\times``` 或纯数字，且不能是空的
+        self.assertTrue(mac["SurfNonInitMax"].strip("$").strip(),
+                        "SurfNonInitMax 为空，表注与正文会渲染成空")
 
 
 if __name__ == "__main__":
