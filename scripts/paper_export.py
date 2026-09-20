@@ -1268,9 +1268,13 @@ def write_macros(data, allow_missing, write=True):
         m("CalibAmpMix", "%.1f" % per.get("D2|D1", 0))
         m("CalibAmpQpas", "%.1f" % per.get("D4|D3", 0))
         m("CalibWorstPair", max(per, key=lambda k: per[k]))
-        # 阈值 0.02% 是"接近零"的显式定义（人为取的，必须写出来）
-        lo_ = [c[3] for c in cells if abs(c[2]) <= 0.02]
-        hi_ = [c[3] for c in cells if abs(c[2]) > 0.02]
+        # 阈值 0.02% 是"接近零"的显式定义（人为取的，必须写出来）。
+        # 它同时也是下面分组统计的**分组依据**，所以必须与计数同源——
+        # 正文里再手写一遍 0.02 就会在改阈值时漂移（缺陷 39 的同型问题）。
+        CALIB_SMALL_THR = 0.02
+        m("CalibSmallThr", "%.2f" % CALIB_SMALL_THR)
+        lo_ = [c[3] for c in cells if abs(c[2]) <= CALIB_SMALL_THR]
+        hi_ = [c[3] for c in cells if abs(c[2]) > CALIB_SMALL_THR]
         m("CalibSmallN", len(lo_))
         m("CalibSmallMed", "%.1f" % np.median(lo_) if lo_ else 0)
         m("CalibRestN", len(hi_))
@@ -1285,10 +1289,105 @@ def write_macros(data, allow_missing, write=True):
                      ("CalibRhoRaw", 0), ("CalibRhoRawP", 1), ("CalibAmpAbsMin", 0),
                      ("CalibAmpMax", 0), ("CalibAmpLo", 0), ("CalibAmpHi", 0),
                      ("CalibAmpMix", 0), ("CalibAmpQpas", 0), ("CalibWorstPair", "-"),
-                     ("CalibSmallN", 0), ("CalibSmallMed", 0), ("CalibRestN", 0),
+                     ("CalibSmallThr", 0), ("CalibSmallN", 0), ("CalibSmallMed", 0),
+                     ("CalibRestN", 0),
                      ("CalibRestMed", 0), ("CalMkTenQpasInst", 0),
                      ("CalMkTenQpasBox", 0)):
             m(n, v)
+
+    # —— 实验设置常量（正文里手写了 10 处以上）——
+    # ref / N_p / G / n 这些值散落在 §1、§3.2、§3.6、§4.2、§5；改一次预算就要全改，
+    # 且"改了数据忘了改正文"正是缺陷 30/32/34 的成因。宏化后只有一个来源。
+    # 值取自本轮实际执行的设置（logs/ 里每个 run 的 components 可核）。
+    SET_NP, SET_G, SET_GMAX, SET_SEEDS = 100, 200, 2000, 30
+    m("SetNp", SET_NP)
+    m("SetG", SET_G)
+    m("SetGMax", SET_GMAX)
+    m("SetSeeds", SET_SEEDS)
+    m("SetRefLo", "1.02")
+    # "有增益"的判据门槛：必须与代码里的 GAIN_P **同一来源**——
+    # 正文写着 0.05、代码改成 0.01 而没人发现，就是最典型的静默漂移。
+    m("SigLevel", "%.2f" % GAIN_P)
+    # 与上述撞值的两个量必须**各自开宏**（同 HKnearBand vs HKdevGap 的先例）：
+    # `100` 在正文里既是种群规模、又是百分号基数；`2000` 既是 G 上限、
+    # 又是置换重抽次数。不加区分就会被守卫判成"同一指标两处来源"。
+    m("PctBase", 100)
+    m("PermSubsets", 2000)
+    # 响应面的五档预算是个**列表**，做成整串宏（含 $ 与 \%，非纯数值）——
+    # 若拆成单个数值会与正文里到处出现的百分数撞值。
+    m("SurfBudgets", r"$10\%,25\%,50\%,75\%,100\%$")
+    # run 级样本量 = 开发集实例数 × seeds（正文 §3.4 那句 $n=300$）
+    m("RunN", 10 * SET_SEEDS)
+
+    # —— 算力放大 10× 的回报（§5"多算一点也没有回报"那句的量化）——
+    # 源 `logs/anytime_g2000.json` 的 hist_hv 轨迹（G=1..2000），取 G=200 与 G=2000 两点。
+    # **用 hist_hv 而不是 final_hv**：后者是末代 archive（算法输出），前者是每代
+    # population 前沿（搜索过程）。混用会把 Elite archive 的"存档增益"算进"算力回报"。
+    _ag = os.path.join(ROOT, "logs", "anytime_g2000.json")
+    _tenx = None
+    if os.path.exists(_ag):
+        try:
+            _d5 = [r for r in load_json(_ag)
+                   if r.get("label") == "D5" and isinstance(r.get("hist_hv"), list)
+                   and len(r["hist_hv"]) >= SET_GMAX]
+            if _d5:
+                _tenx = float(np.mean([
+                    100.0 * (r["hist_hv"][SET_GMAX - 1] - r["hist_hv"][SET_G - 1])
+                    / r["hist_hv"][SET_G - 1] for r in _d5]))
+        except Exception:
+            _tenx = None
+    m("AnytimeTenXPct", p(_tenx, 2) if _tenx is not None else 0)
+
+    # —— T 动作空间穷举扫描（§5）：正文那句 "+0.31\%（p=0.78）" 原先是**盒口径** ——
+    # 缺陷 39：该数字出自 `t_leverage_analysis.py`，它对**该文件里所有臂的前沿并集**
+    # 取归一化边界（盒口径），在 Mk10 上把 T15 vs T50 放大成 +0.31\% 并给 p=0.777；
+    # 同一批数据用**实例边界口径**（落盘 final_hv，与臂集无关）只有 +0.128\%
+    # （p=0.073），且**方向相反**：T15 才是全部 6 档中的最优。
+    # 论文其余数字全是实例边界口径，混用而不声明即违反本节的口气纪律。
+    tl = os.path.join(ROOT, "logs", "_mk10_lab.json")
+    _T_ALL = ("T05", "T10", "T15", "T20", "T50", "T100")
+    _T_SPACE = ("T05", "T10", "T15", "T20")
+    _tsc = None
+    if os.path.exists(tl):
+        try:
+            _by = {}
+            for _r in load_json(tl):
+                if _r.get("label") in _T_ALL and _r.get("final_hv") is not None:
+                    _by.setdefault(_r["label"], {})[_r["seed"]] = float(_r["final_hv"])
+            _ss = sorted(set.intersection(*[set(_by[t]) for t in _T_ALL])) if _by else []
+            if _ss:
+                _mu = {t: float(np.mean([_by[t][s] for s in _ss])) for t in _T_ALL}
+                _bi = max(_T_SPACE, key=lambda t: _mu[t])
+                _wi = min(_T_SPACE, key=lambda t: _mu[t])
+                _ba = max(_T_ALL, key=lambda t: _mu[t])
+                _pr = paired([_by[_bi][s] for s in _ss], [_by[_wi][s] for s in _ss])
+                _tsc = {"gap": 100.0 * (_mu[_bi] - _mu[_wi]) / _mu[_wi],
+                        "p": _pr["p"], "wins": _pr["wins"], "n": _pr["n"],
+                        "dz": _pr["dz"],
+                        "space_is_global": _bi == _ba, "best": _bi,
+                        "n_all": len(_T_ALL)}
+        except Exception:
+            _tsc = None
+    if _tsc:
+        m("TscanGapPct", p(_tsc["gap"], 3))
+        m("TscanGapP", "%.3f" % _tsc["p"])
+        m("TscanDz", p(_tsc["dz"], 2))
+        m("TscanWins", "%d/%d" % (_tsc["wins"], _tsc["n"]))
+        m("TscanSpaceGlobal", 1 if _tsc["space_is_global"] else 0)
+        m("TscanBestTag", _tsc["best"])
+        if _tsc["space_is_global"]:
+            _note = ("空间内那个最优的 $T$ 同时就是全部 %d 档候选中的最优"
+                     "——动作空间没有漏掉任何有意义的东西，" % _tsc["n_all"])
+        else:
+            _note = ("空间内最优并非全部 %d 档候选中的最优，"
+                     "动作空间仍可能漏掉更好的 $T$，" % _tsc["n_all"])
+        m("TscanNote", _note)
+    else:
+        for _n, _v in (("TscanGapPct", 0), ("TscanGapP", 1), ("TscanDz", 0),
+                       ("TscanWins", "0/0"),
+                       ("TscanSpaceGlobal", 0), ("TscanBestTag", "--")):
+            m(_n, _v)
+        m("TscanNote", "（$T$ 扫描数据缺失，本节结论待补。）")
 
     if write:
         write_tex("macros.tex", "\n".join(L) + "\n")

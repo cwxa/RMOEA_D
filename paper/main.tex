@@ -56,7 +56,7 @@ $\CalibAmpLo\times$ 至 $\CalibAmpHi\times$、\textbf{逐格子最高 $\CalibAmp
 \textbf{实例边界口径}，并给出可复现的对照证据。其二，\textbf{组件有效性的重新判定}：
 在实例边界口径下，六个阶梯臂的逐级增量为 MIX3 初始化 $\LadderMixRel\%$（\LadderMixWins\ 实例胜出）、
 随机 VNS $\LadderVnsRel\%$、精英档案 $\LadderEliteRel\%$，而 Q-PAS 仅 $\LadderQpasRel\%$（$p=\LadderQpasP$，不显著）、
-RL 选算子 $\LadderRlRel\%$；进一步用 anytime 轨迹证明算力在 $G=200$ 附近已接近饱和，
+RL 选算子 $\LadderRlRel\%$；进一步用 anytime 轨迹证明算力在 $G=\SetG$ 附近已接近饱和，
 因此 RL 组件的失效不是"学不到"，而是\textbf{没有空间可学}。其三，\textbf{可事前判定
 的增益}：我们提出一个零代探针——只调用一次初始种群构造（不做任何搜索），
 用初始前沿 HV 的杠杆 $\lam$ 预测"某个新实例上 MWR 初始化相对论文口径是否真有净增益"，
@@ -226,7 +226,7 @@ MOEA/D\cite{zhang2007moead} 是这一类的代表。
         本文的每一组比较都是配对的。
   \item \textbf{Wilcoxon 符号秩检验}：配对差往往不服从正态分布，用不了 $t$ 检验，
         于是改用只看"差的正负与其排名"的非参数检验，得到 $p$ 值。本文把
-        "某组件有增益"严格定义为"\textbf{配对检验 $p<0.05$ 且方向为正}"，
+        "某组件有增益"严格定义为"\textbf{配对检验 $p<\SigLevel$ 且方向为正}"，
         而\emph{不是}"差不是零"——浮点误差会让任何差都不等于零，
         用"非零"当判据会把所有实例都判成有增益（\S\ref{sec:stat}）。
   \item \textbf{Cohen's $d_z$}：效应量，衡量"差相对于其自身波动有多大"。
@@ -251,7 +251,7 @@ MOEA/D\cite{zhang2007moead} 是这一类的代表。
     $C_{\max}$，$W$ & 两个目标：最大完工时间、机器总负载；都越小越好 \\
     Pareto 支配 / 前沿 & "两项都不差且至少一项更好"；互不支配的解构成的取舍曲线 \\
     HV & 超体积：前沿与参考点 ref 围出的面积，把一条前沿压成一个数 \\
-    ref & HV 的参考点，本文取 $(1.02,1.02)$（归一化后） \\
+    ref & HV 的参考点，本文取 $(\SetRefLo,\SetRefLo)$（归一化后） \\
     实例边界口径 & HV 归一化边界由实例数据确定性推出，\textbf{与比较对象无关}（本文采用） \\
     盒口径 & 边界取"参与比较的前沿的极值"，读数随比较对象漂移（本文仅作对照） \\
     臂（arm） & 阶梯上的一个算法配置；六个臂 $D_1$--$D_5$ 与 \textsf{RMOEAD} \\
@@ -287,7 +287,7 @@ $\tilde t=(t_1,t_2,t_3)$ 表示，且可在其可行机器集合中任选一台�
 
 \subsection{超体积（HV）}
 本文的单一汇总指标是前沿的 HV（几何含义见 \S\ref{sec:prelim}），
-参考点固定为 $\mathrm{ref}=(1.02,1.02)$。
+参考点固定为 $\mathrm{ref}=(\SetRefLo,\SetRefLo)$。
 HV 的\textbf{归一化边界}取法有两种，本文的全部结论都建立在第二种之上
 （\S\ref{sec:caliber}）：
 \begin{itemize}\itemsep1pt
@@ -343,7 +343,7 @@ $\BndWlSpan\times$（Mk08 的 $\BndMaxLoWl$ 对 Mk02 的 $\BndMinLoWl$），
         图~\ref{fig:ladder} 把两种口径并排画出，$D_2|D_1$ 的相对增幅被放大
         $\CalibAmpMix\times$，而几乎为零的 $D_4|D_3$ 被放大 $\CalibAmpQpas\times$
         ——\textbf{越接近零的效应，相对放大越厉害}：$\CalibCells$ 个（实例，臂对）
-        格子里，$|\Delta \hv|\le 0.02\%$（"接近零"的显式阈值）的 $\CalibSmallN$ 个
+        格子里，$|\Delta \hv|\le \CalibSmallThr\%$（"接近零"的显式阈值）的 $\CalibSmallN$ 个
         格子放大中位数为 $\CalibSmallMed\times$，其余 $\CalibRestN$ 个只有
         $\CalibRestMed\times$。
         \textbf{秩相关的口径必须写明}：对 $\log_{10}|\text{放大}|$ 取秩得
@@ -385,14 +385,14 @@ SHA-256 记录来源（\texttt{data/hurink/PROVENANCE.json}）。
 \subsection{参数与算力}
 算法本质上是随机搜索：一个\textbf{随机种子}（seed）决定它内部的所有随机选择，
 换一个种子就是一次独立重复。单次重复的结果可能碰巧偏好或偏坏，因此每个配置
-都要跑多个种子。本文取种群规模 $N_p=100$、代数 $G=200$、每个配置 30 个随机
-种子（42--71），$\mathrm{ref}=(1.02,1.02)$。所有组间比较都做\textbf{同 seed 配对}，
+都要跑多个种子。本文取种群规模 $N_p=\SetNp$、代数 $G=\SetG$、每个配置 \SetSeeds 个随机
+种子（42--71），$\mathrm{ref}=(\SetRefLo,\SetRefLo)$。所有组间比较都做\textbf{同 seed 配对}，
 以消掉"模糊时间随 seed 变"带来的实例内噪声。响应面实验（\S\ref{sec:surface}）
-另在 $G=2000$ 上限下按墙钟预算分档，用于观察"算力变大时效应如何变"。
+另在 $G=\SetGMax$ 上限下按墙钟预算分档，用于观察"算力变大时效应如何变"。
 
 \subsection{统计口径}\label{sec:stat}
 同一组比较给两套读数：\textbf{实例级}（先在实例内对 30 个 seed 取均值，$n=10$ 或
-$n=66$）与 \textbf{run 级}（逐 seed 配对，$n=300$）。检验用 Wilcoxon 符号秩，
+$n=66$）与 \textbf{run 级}（逐 seed 配对，$n=\RunN$）。检验用 Wilcoxon 符号秩，
 效应量用配对 Cohen's $d_z$；相对增幅定义为
 $\overline{\Delta \hv}/\overline{\hv}_{\text{上一级}}$（先求均值再作比，
 不用 $\overline{\Delta/\hv}$——后者在效应$\approx 0$ 时会反号；\textbf{盒口径的
@@ -441,7 +441,7 @@ RL 选算子 $\LadderRlRel\%$（\LadderRlWins，不显著）。
 
 \subsection{算力–算法响应面：不是学不到，是没空间可学}\label{sec:surface}
 图~\ref{fig:surface} 把每个臂对放在同一族"墙钟预算分数"
-（$10\%,25\%,50\%,75\%,100\%$，$G$ 上限 2000）上比较。
+（\SurfBudgets，$G$ 上限 \SetGMax）上比较。
 初始化的效应随算力增加而\textbf{显著衰减}：在 $10\%$ 预算处三个实例的
 $|\Delta \hv|$ 为 $\SurfInitTenA/\SurfInitTenB/\SurfInitTenC$，到全额预算时只剩
 $\SurfInitEndA/\SurfInitEndB/\SurfInitEndC$（衰减 $\SurfDecayLo$--$\SurfDecayHi$ 倍）；
@@ -497,7 +497,7 @@ MWR 是本文提出的一个初始化变体：决定工序先后时按"剩余工
 一次搜索都不做），取两个变体初始前沿 HV 的比值：
 \begin{equation}
   \lam = \frac{\overline{\hv_0}(\imwr) - \overline{\hv_0}(\imix)}
-               {\overline{\hv_0}(\imix)} \times 100\%,
+               {\overline{\hv_0}(\imix)} \times \PctBase\%,
 \end{equation}
 其中 $\overline{\hv_0}$ 为 30 个 seed 的初始前沿 HV 均值（实例边界口径、
 ref 同正式实验）。代价是每实例 $\times$ 30 seeds 约 1.4\,s。
@@ -584,7 +584,7 @@ $\HKdevGap$ 个百分点（正例最低 $\HKdevPosLamLo\%$，非正例最高 $\H
 否则"廉价门控"的说法是不成立的。
 
 做法是：对每个实例先算出 30 个 seed 的逐 seed 值，再对
-$n\in\{1,2,3,4\}$ 枚举全部 $\binom{30}{n}$ 个子集、对更大的 $n$ 随机抽样 2000 个子集，
+$n\in\{1,2,3,4\}$ 枚举全部 $\binom{30}{n}$ 个子集、对更大的 $n$ 随机抽样 \PermSubsets 个子集，
 用与正式探针\textbf{完全相同的估计量}重算 $\lam$，最后看判定是否与该实例
 30-seed 判定一致。表~\ref{tab:probe_seeds} 给出结果。
 
@@ -604,10 +604,12 @@ $\PSagreeOne$，看起来很好，但最差实例只有 $\PSagreeMinOne$ ——
 
 \subsection{为什么两个 RL 组件没有空间}
 三条证据互相独立且一致：(1) 阶梯上 Q-PAS 与 RL 选算子均不显著；
-(2) 对 $T$ 的动作空间做穷举式扫描（把所有候选的 $T$ 值逐个试完），
-空间内最优与最差的差只有 $+0.31\%$（$p=0.78$），
-说明\textbf{动作空间本身的天花板就很低}；(3) 算力响应面显示 $G=200$ 附近已接近饱和，
-把预算放大到 $G=2000$ 也只带来 $1.5\%$ 量级的绝对值。
+(2) 对 $T$ 的动作空间做穷举式扫描（把所有候选的 $T$ 值逐个试完，
+含空间外的更大候选值）：空间内最优与最差的差只有 $\TscanGapPct\%$
+（配对检验 $p=\TscanGapP$、效应量 $d=\TscanDz$，胜出 $\TscanWins$），
+\TscanNote
+说明\textbf{动作空间本身的天花板就很低}；(3) 算力响应面显示 $G=\SetG$ 附近已接近饱和，
+把预算放大到 $G=\SetGMax$（$10\times$ 算力）也只带来 $\AnytimeTenXPct\%$ 的相对增幅。
 把三者放在一起，RL 组件失效的解释不是"学习算法不行"，而是
 \textbf{它在两个方向上都无事可做}：可选的 T 值彼此差不多，
 而多算一点也没有回报。反之，初始化改变的是搜索的\textbf{起点}，
@@ -648,7 +650,7 @@ $\PSagreeOne$，看起来很好，但最差实例只有 $\PSagreeMinOne$ ——
         也必须连同"距门限的距离"一并报告。
   \item 本文只报告 HV 单一指标；虽然 HV 是双目标问题的常用汇总，
         但不排除某些组件在特定目标方向上有局部作用。
-  \item 响应面实验受墙钟预算上限限制（$G\le 2000$），
+  \item 响应面实验受墙钟预算上限限制（$G\le \SetGMax$），
         "饱和"的结论限定在该范围内。
 \end{itemize}
 

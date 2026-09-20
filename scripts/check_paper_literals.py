@@ -110,6 +110,68 @@ def find_literals(main_src, macros, allow=()):
     return hits
 
 
+# ────────────────────── 反向扫描（正文 → 宏） ──────────────────────
+# 正向只回答"宏值有没有被手写一遍"；反向回答"正文里的数字有没有宏"。
+# 缺陷 39（2026-09-20）就是靠反向才发现的：§5 的 `+0.31%` / `p=0.78` 在正文里
+# 存在、量级合理、也无从与任何宏比对——正向检查对它是**完全盲的**。
+
+RE_NUM_ANY = re.compile(r"(?<![\w.\\])(\d+\.\d+|\d{3,})(?![\d])")
+
+# 版式与排版参数：这些数字不是实验结果，不该进比对
+_NON_DATA_CTX = ("linewidth", "textwidth", "geometry", "arraystretch",
+                 "includegraphics", "hspace", "vspace", "documentclass",
+                 "usepackage", "setlength", "tabcolsep", "paperwidth",
+                 "paperheight", "graphicspath")
+
+_RE_YEAR = re.compile(r"^(19|20)\d{2}$")
+
+
+def macro_value_set(macros):
+    """宏值的可比较集合（含省略 +/− 的版本）。只收数值型宏。"""
+    out = set()
+    for v in macros.values():
+        v = v.strip().replace("\\%", "").replace("$", "").replace(" ", "")
+        if not v or not re.match(r"^[+-]?\d", v):
+            continue
+        out.add(v)
+        if v[0] in "+-":
+            out.add(v[1:])
+    return out
+
+
+def find_unmacroed(main_src, macros):
+    """反向扫描：正文里出现、却不对应任何宏的小数/大整数。
+
+    返回 ``[(行号, 数字, 上下文), ...]``。跳过注释、``\\input``、版式参数
+    与参考文献区——否则会刷出一屏假阳性（页码、版式尺寸、DOI 年份）。
+
+    注意这是**提示性**检查：像 "SHA-256" 这类固定术语里的数字无法机械区分，
+    所以默认只报告、不置错，由人复核。
+    """
+    vals = macro_value_set(macros)
+    lines = main_src.splitlines()
+    bib = next((i for i, l in enumerate(lines)
+                if l.strip().startswith("\\begin{thebibliography}")), None)
+    out = []
+    for i, line in enumerate(lines, 1):
+        s = line.strip()
+        if s.startswith("%") or s.startswith("\\input{"):
+            continue
+        if bib is not None and i - 1 >= bib:
+            continue
+        if any(k in line for k in _NON_DATA_CTX):
+            continue
+        line = re.split(r"(?<!\\)%", line, maxsplit=1)[0]
+        for mm in RE_NUM_ANY.finditer(line):
+            tok = mm.group(1)
+            if tok in vals:
+                continue
+            if "." not in tok and (_RE_YEAR.match(tok) or len(tok) < 3):
+                continue
+            out.append((i, tok, s[:100]))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -117,6 +179,11 @@ def main():
     ap.add_argument("--main", default=MAIN)
     ap.add_argument("--allow", default="",
                     help="逗号分隔的宏名白名单（这些宏的值允许在正文里字面出现）")
+    ap.add_argument("--reverse", action="store_true",
+                    help="同时反向扫描：列出正文里出现、却没有宏对应的数字（缺陷 39）")
+    ap.add_argument("--reverse-strict", action="store_true",
+                    help="反向扫描有命中即 exit 1（默认只报告，因为固定术语里的"
+                         "数字无法机械区分，如 SHA-256）")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -149,6 +216,20 @@ def main():
               % ",".join(k for k, _ in hits))
         return 1
     print("[通过] 正文未出现已宏化数字的字面副本（比对 %d 个纯数值宏）" % len(nums))
+
+    if args.reverse or args.reverse_strict:
+        unm = find_unmacroed(src, macros)
+        if not unm:
+            print("[通过] 反向扫描：正文里的数字都有宏对应")
+        else:
+            print("\n[提示] 反向扫描发现 %d 处**无宏对应**的数字——"
+                  "逐一确认它是实验结果还是版式/术语：" % len(unm))
+            for ln, tok, ctx in unm:
+                print("   L%-5d %-12s %s" % (ln, tok, ctx))
+            print("\n       若确认是实验结果，请让 paper_export.py 现场产出宏，"
+                  "正文改用宏名（缺陷 34/39）。")
+            if args.reverse_strict:
+                return 1
     return 0
 
 

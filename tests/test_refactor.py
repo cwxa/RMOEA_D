@@ -3198,5 +3198,152 @@ class TestPaperLayoutGuards(unittest.TestCase):
                       "概念图没有声明非实验数据的性质，会被当成实验读数")
 
 
+class TestTscanUsesInstanceCaliber(unittest.TestCase):
+    """缺陷 39 回归锁：§5 的 T 扫描数字必须是**实例边界口径**。
+
+    原句写的是 "空间内最优与最差的差只有 +0.31\\%（p=0.78）"。这个数字出自
+    ``t_leverage_analysis.py``，它对**该文件里所有臂的前沿并集**取归一化边界
+    （盒口径）；而论文其余数字全是实例边界口径（``instance_hv_bounds``，与臂集无关）。
+    两个口径在 Mk10 上甚至**方向相反**：盒口径说 T50 最优（空间内 T15 够不着），
+    实例边界口径说 T15 就是全部 6 档的最优、T50 反而更低。
+
+    所以锁两层：(1) 宏值 = 从落盘 ``final_hv`` 现算的实例边界口径值；
+    (2) 它与盒口径值**确实不同**——否则这把锁没有区分度，改回盒口径也测不出来。
+    """
+
+    BS = chr(92)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        cls.lab = os.path.join(cls.root, "logs", "_mk10_lab.json")
+        cls.macros = os.path.join(cls.root, "paper", "tables", "macros.tex")
+        if not os.path.exists(cls.lab):
+            raise unittest.SkipTest("logs/_mk10_lab.json 不存在")
+        with io.open(cls.lab, encoding="utf-8") as fh:
+            cls.rows = json.load(fh)
+
+    T_ALL = ("T05", "T10", "T15", "T20", "T50", "T100")
+    T_SPACE = ("T05", "T10", "T15", "T20")
+
+    def _inst_means(self):
+        """实例边界口径：直接聚合落盘的 final_hv（与臂集无关）。"""
+        by = {}
+        for r in self.rows:
+            if r.get("label") in self.T_ALL and r.get("final_hv") is not None:
+                by.setdefault(r["label"], {})[r["seed"]] = float(r["final_hv"])
+        seeds = sorted(set.intersection(*[set(by[t]) for t in self.T_ALL]))
+        return {t: sum(by[t][s] for s in seeds) / len(seeds) for t in self.T_ALL}
+
+    def _box_means(self):
+        """盒口径：对**全文件所有臂的前沿并集**取界（即缺陷 39 的来源）。"""
+        sys.path.insert(0, os.path.join(self.root, "src"))
+        sys.path.insert(0, os.path.join(self.root, "scripts"))
+        import numpy as np
+        from rmoea_d.utils.metrics import compute_hv, estimate_hv_bounds
+        fronts = [np.asarray(r["final_pf"], float)
+                  for r in self.rows if r.get("final_pf")]
+        lo, hi = estimate_hv_bounds(fronts)
+        by = {}
+        for r in self.rows:
+            if r.get("label") in self.T_ALL and r.get("final_pf"):
+                by.setdefault(r["label"], {})[r["seed"]] = compute_hv(
+                    np.asarray(r["final_pf"], float), norm_bounds=(lo, hi))
+        return {t: sum(by[t].values()) / len(by[t]) for t in self.T_ALL}
+
+    def _gap_pct(self, means):
+        bi = max(self.T_SPACE, key=lambda t: means[t])
+        wi = min(self.T_SPACE, key=lambda t: means[t])
+        return 100.0 * (means[bi] - means[wi]) / means[wi]
+
+    def _macro(self, name):
+        with io.open(self.macros, encoding="utf-8") as fh:
+            for line in fh:
+                s = line.strip()
+                if s.startswith(self.BS + "newcommand" + "{" + self.BS + name + "}"):
+                    return s.split("}{", 1)[1].rstrip("}")
+        self.fail("macros.tex 里没有宏 %s" % name)
+
+    def test_macro_matches_instance_caliber(self):
+        gap = self._gap_pct(self._inst_means())
+        got = float(self._macro("TscanGapPct"))
+        self.assertAlmostEqual(
+            got, gap, places=3,
+            msg="\\TscanGapPct=%.4f 与实例边界口径现算值 %.4f 不符" % (got, gap))
+
+    def test_two_calibers_disagree_so_the_lock_has_teeth(self):
+        """区分度：盒口径与实例边界口径必须给出**不同**的答案。"""
+        inst = self._inst_means()
+        g_inst = self._gap_pct(inst)
+        g_box = self._gap_pct(self._box_means())
+        self.assertGreater(
+            abs(g_box - g_inst), 0.05,
+            "两口径答案相同（%.4f vs %.4f）——本锁失去区分度，需重新审视"
+            % (g_box, g_inst))
+        # 实例边界口径下，空间内最优必须同时是全空间最优（这才是"天花板为 0"）
+        self.assertEqual(max(self.T_SPACE, key=lambda t: inst[t]),
+                         max(self.T_ALL, key=lambda t: inst[t]),
+                         "实例边界口径下空间内最优不再是全空间最优——结论要重写")
+
+    def test_old_box_reading_is_gone_from_prose(self):
+        """正文不得回退到盒口径的那个读法。"""
+        with io.open(os.path.join(self.root, "paper", "main.tex"), encoding="utf-8") as fh:
+            tex = fh.read()
+        self.assertNotIn("+0.31" + self.BS + "%", tex,
+                         "正文又出现了盒口径的 +0.31% —— 缺陷 39 复发")
+        self.assertIn(self.BS + "TscanGapPct", tex,
+                      "正文没有引用 \\TscanGapPct，T 扫描数字又变成手写了")
+
+
+class TestSettingConstantsAreMacroized(unittest.TestCase):
+    """设置常量必须从宏来（2026-09-20）。
+
+    反向扫描（缺陷 39 的手段）查出：正文里 `(1.02,1.02)` 出现 6 次、`G=200`
+    3 次、`N_p=100` 与 `p<0.05` 各 1 次，全部手写。它们的特点是
+    **改一次就要全文改**，而"改了数据忘了改正文"正是缺陷 30/32/34/39 的共同成因。
+    宏化后这些值只有一个来源（`paper_export.py`）。
+
+    锁两件事：正文不得回退到字面值；宏值必须与论文声称的设置一致。
+    """
+
+    BS = chr(92)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        with io.open(os.path.join(cls.root, "paper", "main.tex"), encoding="utf-8") as fh:
+            cls.tex = fh.read()
+        cls.macros = {}
+        mp = os.path.join(cls.root, "paper", "tables", "macros.tex")
+        if os.path.exists(mp):
+            with io.open(mp, encoding="utf-8") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if s.startswith(cls.BS + "newcommand" + "{"):
+                        name = s.split("{")[1].split("}")[0].lstrip(cls.BS)
+                        cls.macros[name] = s.split("}{", 1)[1].rstrip("}")
+
+    def test_no_literal_setting_values_in_prose(self):
+        for lit in ("(1.02,1.02)", "$N_p=100$", "$G=200$", "$p<0.05$"):
+            self.assertNotIn(lit, self.tex,
+                             "正文又出现字面设置常量 %s —— 应改用宏" % lit)
+
+    def test_prose_uses_the_setting_macros(self):
+        for name in ("SetRefLo", "SetNp", "SetG", "SetGMax", "SigLevel", "RunN"):
+            self.assertIn(self.BS + name, self.tex,
+                          "正文没有引用 \\%s" % name)
+
+    def test_macro_values_match_the_declared_setup(self):
+        if not self.macros:
+            self.skipTest("paper/tables/macros.tex 不存在")
+        exp = {"SetNp": "100", "SetG": "200", "SetGMax": "2000",
+               "SetSeeds": "30", "SetRefLo": "1.02", "SigLevel": "0.05",
+               "RunN": "300"}
+        for k, v in exp.items():
+            self.assertEqual(self.macros.get(k), v,
+                             "宏 \\%s 期望 %s，实际 %r —— 设置或导出器被改过"
+                             % (k, v, self.macros.get(k)))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -136,6 +136,21 @@ def main():
         return 2
     print("  全部依赖就绪（%d 个）" % len(deps))
 
+    print("\n" + "=" * 92)
+    print("[2b/3] 数字一致性（双向扫描）")
+    print("=" * 92)
+    # 缺陷 30/32/34 的正向守卫（宏值不许在正文里字面重现）+ 缺陷 39 的反向扫描
+    # （正文里的数字有没有宏）。反向结果**只报告不阻塞**：`SHA-256`、计时这类
+    # 数字无法机械区分，但每次构建都打印出来，就不会再烂在暗处——
+    # 缺陷 39 正是靠它才被发现的（正向检查对"+0.31%"完全盲）。
+    rc2, out2 = run([sys.executable, os.path.join(ROOT, "scripts",
+                                                  "check_paper_literals.py"),
+                     "--reverse"], cwd=ROOT)
+    print(out2.strip()[-2000:])
+    if rc2 != 0:
+        print("\n[失败] 数字一致性守卫未通过：正文与宏有两处来源（缺陷 30/32/34/39）")
+        return rc2
+
     if args.no_compile:
         return 0
 
