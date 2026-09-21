@@ -118,6 +118,10 @@ def step_stats(i_from, i_to, idx=None):
 
 
 def main():
+    # 显式 CLI 契约（同 optimization_plots.py）：`--help` 必须可用、未知旗标必须报错。
+    import argparse
+    argparse.ArgumentParser(
+        description="审计 Li et al. (2022) Table 5 与本文复现的差异（无参数）").parse_args()
     out = []
     w = out.append
 

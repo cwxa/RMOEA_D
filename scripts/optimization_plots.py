@@ -616,6 +616,13 @@ def fig6_lever_summary():
 
 
 def main():
+    # 显式 CLI 契约：**即使没有参数，也必须让 `--help` 可用、拼错的旗标报错**。
+    # 否则 `python scripts/optimization_plots.py --help` 会安静地忽略该旗标，
+    # **直接开始重画 6 张图**（本脚本此前就是这样）——缺陷 27 的同族隐患：
+    # 脚本没有契约，使用者既无法发现参数、也无法被拼错拦下。
+    import argparse
+    argparse.ArgumentParser(
+        description="生成 charts/optimization/ 下的 6 张复盘图（无参数）").parse_args()
     _ensure_out()
     for fn in (fig1_speedup, fig2_init_variants, fig3_holdout_forest,
                fig4_wallclock_hv, fig5_pareto_fronts, fig6_lever_summary):

@@ -2864,7 +2864,15 @@ class TestScriptCLIHelp(unittest.TestCase):
                  if n.endswith(".py") and not n.startswith("_")]
         self.assertGreaterEqual(len(names), 20)
 
-    def test_every_script_help_exits_zero(self):
+    def test_every_script_help_exits_zero_and_prints_usage(self):
+        """`--help` 必须退出码 0 **且真的打印 usage**。
+
+        只查退出码是不够的：`optimization_plots.py` 与 `paper_table5_audit.py`
+        原先**根本没有 argparse**，`--help` 被当成普通参数忽略、脚本照常跑完
+        并返回 0 —— 旧锁因此放行了两个"没有 CLI 契约"的脚本，
+        使用者既发现不了参数、也不会被拼错的旗标拦下（缺陷 27 同族）。
+        现在改为：**含 `__main__` 的脚本都要求 `--help` 输出 `usage:`**。
+        """
         bad = []
         for n in sorted(os.listdir(self.SCRIPTS)):
             if not n.endswith(".py") or n.startswith("_"):
@@ -2872,16 +2880,42 @@ class TestScriptCLIHelp(unittest.TestCase):
             path = os.path.join(self.SCRIPTS, n)
             with open(path, encoding="utf-8", errors="ignore") as fh:
                 src = fh.read()
-            if "argparse" not in src:
+            if '__name__ == "__main__"' not in src and "argparse" not in src:
                 continue
             r = subprocess.run([sys.executable, path, "--help"],
                                capture_output=True, text=True, timeout=600)
+            out = (r.stdout or "") + (r.stderr or "")
             if r.returncode != 0:
                 tail = ((r.stderr or "").strip().splitlines() or [""])[-1]
-                bad.append("%s -> %s" % (n, tail[:140]))
+                bad.append("%s -> 退出码 %d：%s" % (n, r.returncode, tail[:120]))
+            elif "usage:" not in out:
+                bad.append("%s -> --help 没有打印 usage（多半没接 argparse，"
+                           "旗标被静默忽略）" % n)
         self.assertEqual(
             bad, [],
-            "这些脚本 --help 失败（多半是 help 里的裸 %%）：\n" + "\n".join(bad))
+            "这些脚本的 --help 不满足契约（多半是 help 里的裸 %% 或没接 argparse）：\n"
+            + "\n".join(bad))
+
+    def test_every_runnable_script_declares_argparse(self):
+        """有 `__main__` 入口的脚本必须有 argparse —— 纯库模块显式豁免。
+
+        豁免清单是**白名单**：新增一个"只提供函数、不直接运行"的库模块时，
+        必须显式登记，避免它悄悄变成一个"吞掉任何旗标"的脚本。
+        """
+        LIBRARY_ONLY = {"hv_box.py"}      # 只有 helper、无 main()/__main__
+        missing = []
+        for n in sorted(os.listdir(self.SCRIPTS)):
+            if not n.endswith(".py") or n.startswith("_") or n in LIBRARY_ONLY:
+                continue
+            path = os.path.join(self.SCRIPTS, n)
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                src = fh.read()
+            if '__name__ == "__main__"' in src and "argparse" not in src:
+                missing.append(n)
+        self.assertEqual(
+            missing, [],
+            "这些脚本可被直接运行却没有 argparse（无法 --help、无法拒绝错旗标）：%s"
+            % missing)
 
     def test_documented_init_probe_command_runs(self):
         """文档 §8 写死的 init_probe 调用必须真的能跑通（缺陷 19）。"""
@@ -4046,6 +4080,89 @@ class TestTableNotesDoNotHardcodeSettings(unittest.TestCase):
                     bad.append((name, m.group(0), fix))
         self.assertEqual([], bad,
                          "表注/表头里写死了设置参数（应改为宏引用）：%s" % bad)
+
+
+class TestDocsDoNotAssertRetractedCaliberClaims(unittest.TestCase):
+    """文档不得再**断言**"p / wins / dz 不受口径影响"（缺陷 25/39 已撤回该论断）。
+
+    这是缺陷 40（"修复面不全"）的同族问题：这句话 2026-09-20 已在
+    `optimization-report.md` 与 `ablation-qpas-rvns-diagnosis.md` 里更正，
+    却仍留在 `aba-budget-allocation.md` 与 `paper-vs-reproduction.md` 的
+    **勘误框顶部**——而勘误框恰恰是读者最先读、最信任的地方。
+
+    本锁按"**断言 vs 引用**"区分：更正性地引用这句话（同句带"曾写 / 是错的"
+    等撤回标记）是允许的；**直接断言**才失败。
+    正确表述：**同一盒内可比；跨盒、跨口径一律不可引用，包括 p 与 wins**。
+    """
+
+    CLAIM = re.compile(r"不受(?:口径|盒)?影响")
+    SUBJECT = re.compile(r"\bp\b|\bwins\b|\bdz\b|符号")
+    RETRACT = re.compile(r"曾写|原先写|原框|是错的|错的|更正|勘误|撤回|不可引用")
+
+    def test_no_doc_asserts_the_retracted_claim(self):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        docdir = os.path.join(root, "docs")
+        if not os.path.isdir(docdir):
+            self.skipTest("docs/ 不存在")
+        bad = []
+        for name in sorted(os.listdir(docdir)):
+            if not name.endswith(".md"):
+                continue
+            with io.open(os.path.join(docdir, name), encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+            for i, line in enumerate(lines):
+                m = self.CLAIM.search(line)
+                if not m:
+                    continue
+                # 只在"这句话在说 p / wins / dz"时才管（避免误伤无关用法）
+                lo, hi = max(0, m.start() - 40), m.end() + 40
+                if not self.SUBJECT.search(line[lo:hi]):
+                    continue
+                # 同句或上一句带撤回标记 -> 更正性引用，放行
+                ctx = "\n".join(lines[max(0, i - 1):i + 1])
+                if self.RETRACT.search(ctx):
+                    continue
+                bad.append((name, i + 1, line.strip()[:90]))
+        self.assertEqual(
+            [], bad,
+            "以下文档仍在**断言**已被缺陷 25/39 撤回的说法——"
+            "正确表述是“同一盒内可比；跨盒、跨口径一律不可引用，包括 p 与 wins”：%s"
+            % bad)
+
+
+class TestDocumentedCommandsAreExecutable(unittest.TestCase):
+    """文档里的复现命令必须能被脚本的 argparse 接受（缺陷 49）。
+
+    缺陷 19（"文档复现命令未实测"）本轮**复发**：`docs/new-arch-report.md`
+    的 `caliber_audit.py` 调用漏了必填的 `--pairs`，一跑就报
+    `error: the following arguments are required: --pairs`；而那一行旁边
+    写着"零算力，复用 2400 runs"，读者只会怀疑自己的环境。
+
+    做法见 `scripts/check_doc_commands.py`：从文档里抽出命令，与脚本
+    `--help` 的 usage 对照（缺必填旗标、用了不支持的旗标都算失败）。
+    """
+
+    def _run(self, *args):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        return subprocess.run(
+            [sys.executable, os.path.join(root, "scripts", "check_doc_commands.py")]
+            + list(args), capture_output=True, text=True, timeout=900)
+
+    def test_docs_commands_are_accepted_by_argparse(self):
+        r = self._run()
+        self.assertEqual(r.returncode, 0,
+                         "文档里有命令跑不起来：\n" + (r.stdout or "") + (r.stderr or ""))
+
+    def test_the_checker_itself_is_not_vacuous(self):
+        """防空扫（缺陷 43 的教训）：喂已知坏例子，检查器必须报出来。
+
+        本项目已经栽过一次"判据看着绿灯、其实什么都没扫"（缺陷 43：交付判据
+        读错信号源，三类计数恒为 0）。所以**检查器本身也要能被证伪**。
+        """
+        r = self._run("--self-test")
+        self.assertEqual(r.returncode, 0,
+                         "检查器对已知错误命令没有报错——它恒为空扫：\n"
+                         + (r.stdout or "") + (r.stderr or ""))
 
 
 if __name__ == "__main__":

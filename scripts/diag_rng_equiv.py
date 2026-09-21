@@ -18,6 +18,11 @@ def check(label, cond):
 
 
 def main():
+    # 显式 CLI 契约：`--help` 必须可用、未知旗标必须报错（缺陷 27 的同族防护）。
+    import argparse
+    argparse.ArgumentParser(
+        description="验证 rng.choice(lst) 与 lst[rng.randint(...)] 是否消耗同一随机流"
+                    "（无参数，直接跑）").parse_args()
     print("numpy", np.__version__)
     print()
     print("[1] rng.choice(lst)  vs  lst[rng.randint(len(lst))]")

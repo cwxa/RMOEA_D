@@ -32,6 +32,10 @@ list5 = [1, 2, 3, 4, 5]
 
 
 def main():
+    # 显式 CLI 契约：`--help` 必须可用、未知旗标必须报错（缺陷 27 的同族防护）。
+    import argparse
+    argparse.ArgumentParser(
+        description="诊断 numpy reduce/prod 热点的来源（无参数，直接跑）").parse_args()
     print("instance: numpy", np.__version__, "python", sys.version.split()[0])
     print()
     bench("rng.choice(5, p=probs)          [select_operator]",

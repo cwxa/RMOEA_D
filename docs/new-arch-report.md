@@ -854,7 +854,9 @@ $PY scripts/anytime_run.py --instances Mk07,Mk09,Mk10 --arms D1,D2 \
     --seeds 30 --max_gen 4000 --workers 12 --out logs/anytime_g4000.json
 
 # 2. 口径审计（零算力，复用 2400 runs 的 ablation_ladder.json）
+#    --pairs 是必填：A=B 中 A 为被测、B 为对照
 $PY scripts/caliber_audit.py --labs logs/ablation_ladder.json \
+    --pairs D2=D1,D3=D2,D4=D3,D5=D4,RMOEAD=D5 \
     --out logs/ablation_ladder.caliber.json
 
 # 3. anytime 轨迹分析（零算力）
