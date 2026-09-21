@@ -11,9 +11,14 @@
   [3] Full（Q-PAS+RVNS）与各组件的配对比较
   [4] Q-PAS 实际学到的 T 使用分布
 
-HV 一律用**参考集归一化**重算：所有臂、所有 run 的前沿并集作为共用归一化盒，
-ref=(1.02,1.02) —— 与 ``scripts/ablation_analysis.py`` 口径一致。
-（不要直接读 JSON 里的 final_hv，那是单 run 的实例边界口径。）
+HV 一律用**参考集归一化**重算（**盒口径**）：所有臂、所有 run 的前沿并集作为
+共用归一化盒，ref=(1.02,1.02) —— 与 ``scripts/ablation_analysis.py`` 口径一致。
+
+⚠ 本脚本输出的是**盒口径**，边界随臂集漂移（缺陷 30），而且它能让结论**反向**
+（缺陷 39：Mk10 固定-T 扫参在盒口径下读作"最优 T=50、Friedman p=4.7e-05***"，
+换成**实例边界口径**（落盘 ``final_hv``）则是"最优 T=15、p=0.54"）。
+**论文与 docs 的效应量一律读 ``final_hv``**；本脚本只作**盒内灵敏度参考**，
+引用任何数字都必须同时声明臂集。实例边界口径的对照见 ``scripts/t_caliber_check.py``。
 """
 import argparse
 import collections
@@ -98,7 +103,8 @@ def main():
     print(hv_box.format_box(box))
     _sp = hv_box.write_box_sidecar(args.lab_json, box)
     print(f"norm-box sidecar -> {_sp}")
-    print("  注：绝对 HV 只在**同一盒**内可比（看 sha1）；ΔHV/p/wins 不受盒影响。")
+    print("  注：全部数字（含 ΔHV / p / wins）只在**同一盒**内可比（看 sha1）；"
+          "换臂集会改变相对大小乃至最优臂归属（缺陷 25/30/39）。")
     print("=" * 100)
     print(f"{'arm':<18}{'HV mean':<11}{'std':<9}{'median':<11}{'min':<10}{'max':<10}{'time(s)'}")
     print("-" * 100)

@@ -15,6 +15,8 @@
 
 import sys
 import os
+import ast
+import re
 import json
 import inspect
 import io
@@ -3343,6 +3345,86 @@ class TestSettingConstantsAreMacroized(unittest.TestCase):
             self.assertEqual(self.macros.get(k), v,
                              "宏 \\%s 期望 %s，实际 %r —— 设置或导出器被改过"
                              % (k, v, self.macros.get(k)))
+
+
+class TestNoStaleCaliberClaims(unittest.TestCase):
+    """缺陷 41 回归锁。
+
+    缺陷 25/30/39 已证明：换臂集会改变 ΔHV、p、wins，甚至**最优臂的归属**。
+    但"只引用相对差/p/wins 就与盒无关"这句断言仍活在多处 —— 其中两处是
+    **运行时会打印进日志**的字符串（`t_leverage_analysis.py` /
+    `init_variant_analysis.py`），最危险。
+
+    本锁扫 scripts/*.py 的**字符串常量**（AST，注释不算 —— 注释里记录勘误是对的）。
+    """
+
+    PAT = re.compile(r"不受盒影响|不受盒|与盒无关|不受口径|口径无影响")
+
+    def test_no_stale_claim_in_scripts(self):
+        sdir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        bad = []
+        for fn in sorted(os.listdir(sdir)):
+            if not fn.endswith(".py"):
+                continue
+            with io.open(os.path.join(sdir, fn), encoding="utf-8") as fh:
+                try:
+                    tree = ast.parse(fh.read())
+                except SyntaxError:
+                    continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    for m in self.PAT.finditer(node.value):
+                        seg = node.value[max(0, m.start() - 35):m.end() + 25]
+                        bad.append("%s:%d  ...%s..." % (fn, node.lineno,
+                                                        seg.replace("\n", " ")))
+        self.assertEqual(
+            bad, [],
+            "以下字符串仍在断言'口径无关'（缺陷 25/30/39 已推翻）：\n  " + "\n  ".join(bad))
+
+    def test_the_two_runtime_prints_are_fixed(self):
+        """点对点：两个曾把错误断言打印进日志的脚本，现在必须打印口径警告。"""
+        sdir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+        for fn, must in (("t_leverage_analysis.py", "换臂集"),
+                         ("init_variant_analysis.py", "跨臂集不可比")):
+            with io.open(os.path.join(sdir, fn), encoding="utf-8") as fh:
+                src = fh.read()
+            self.assertNotIn("不受盒影响", src, "%s 仍含旧断言" % fn)
+            self.assertIn(must, src, "%s 缺少口径警告（应含 %r）" % (fn, must))
+
+
+class TestAuditDocDeclaresCaliber(unittest.TestCase):
+    """缺陷 40 回归锁：含盒口径数字的文档必须声明口径，且不得再无条件称 T50 最优。"""
+
+    def setUp(self):
+        self.p = os.path.join(os.path.dirname(__file__), "..", "docs",
+                              "qpas-implementation-audit.md")
+        with io.open(self.p, encoding="utf-8") as fh:
+            self.src = fh.read()
+
+    def test_declares_caliber_and_no_stale_best_T(self):
+        self.assertIn("口径勘误", self.src, "文档没有口径勘误框（缺陷 40）")
+        self.assertIn("T15", self.src, "文档没有给出实例边界口径的最优档 T15")
+        self.assertNotIn("T50  0.83990   <- 最优固定 T", self.src,
+                         "又在无条件声称 T50 是最优固定 T（缺陷 39/40）")
+
+    def test_documented_best_T_matches_recomputation(self):
+        """端到端：文档里写的 T15 均值必须等于现算的实例边界口径最优档均值。"""
+        lab = os.path.join(os.path.dirname(__file__), "..", "logs", "_mk10_lab.json")
+        if not os.path.exists(lab):
+            self.skipTest("logs/_mk10_lab.json 不存在")
+        with io.open(lab, encoding="utf-8") as fh:
+            rows = json.load(fh)
+        by = {}
+        for r in rows:
+            if r.get("label") in ("T05", "T10", "T15", "T20", "T50", "T100") \
+                    and r.get("final_pf") is not None:
+                by.setdefault(r["label"], {})[r["seed"]] = float(r["final_hv"])
+        mean = {k: float(np.mean(list(v.values()))) for k, v in by.items()}
+        best = max(mean, key=lambda k: mean[k])
+        self.assertEqual(best, "T15",
+                         "实例边界口径下最优档不再是 T15 —— 文档结论必须重写")
+        self.assertIn("%.6f" % mean["T15"], self.src,
+                      "文档里没有现算值 %.6f（T15 实例边界口径均值）" % mean["T15"])
 
 
 if __name__ == "__main__":
