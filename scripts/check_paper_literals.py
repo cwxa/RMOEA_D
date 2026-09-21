@@ -51,15 +51,42 @@ def load_macros(path=MACROS):
     return out
 
 
+def body_only(src):
+    """只保留 `\\begin{document}` 之后的**正文**，导言区整段作废。
+
+    为什么必须切这一刀：导言区是**配置**（版式尺寸、浮动配额、行距、宏包选项），
+    其中的数字与"实验结果"没有任何关系，却会和结果宏**撞值**——
+    实测把 `\\bottomfraction` 设为 0.85、`\\textfraction` 设为 0.06，
+    当场撞上 `\\HKaccRejectAll`(=0.85) 与 `\\PSmkNineMargin`(=0.06)，
+    正向扫描报"数字有两处来源"。这类假阳性若靠逐个加关键字豁免来消，
+    下次换个参数名又会出现；切在 `\\begin{document}` 上则一次性封死。
+
+    **行号必须保持**：把导言区的行替换成空行而不是删掉，否则
+    `find_unmacroed` 报出的行号会整体前移，指到错的行上。
+    实现上用 `splitlines(keepends=True)` 保留每行的换行符——用 `splitlines()`
+    会丢掉"文件以换行结尾"这一信息，前后行数差 1，测试当场抓到。
+    """
+    lines = src.splitlines(keepends=True)
+    cut = None
+    for i, l in enumerate(lines):
+        if l.strip().startswith("\\begin{document}"):
+            cut = i
+            break
+    if cut is None:
+        return src
+    blank = "".join("\n" for l in lines[:cut] if l.endswith("\n"))
+    return blank + "".join(lines[cut:])
+
+
 def strip_comments_and_inputs(src):
-    """去掉注释行与 `\\input{...}` 行——宏名本来就写在正文里，不算重复。
+    """去掉导言区、注释行与 `\\input{...}` 行——宏名本来就写在正文里，不算重复。
 
     **注意**：LaTeX 里 `\\%` 是转义百分号（正文里的"百分之"），不是注释起点。
     按第一个 `%` 截断会把整行后半吃掉，于是漏掉真正的重复——本检查器最初就
     栽在这里（`0.81` 明明在正文里，却报"未出现"）。只认**未被反斜杠转义**的 `%`。
     """
     keep = []
-    for line in src.splitlines():
+    for line in body_only(src).splitlines():
         s = line.strip()
         if s.startswith("%"):
             continue
@@ -149,7 +176,7 @@ def find_unmacroed(main_src, macros):
     所以默认只报告、不置错，由人复核。
     """
     vals = macro_value_set(macros)
-    lines = main_src.splitlines()
+    lines = body_only(main_src).splitlines()
     bib = next((i for i, l in enumerate(lines)
                 if l.strip().startswith("\\begin{thebibliography}")), None)
     out = []

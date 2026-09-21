@@ -19,6 +19,25 @@
 \captionsetup[table]{skip=4pt}
 \renewcommand{\arraystretch}{1.08}
 
+% 浮动体放置策略。**这是表格跑到参考文献之后的根因所在**（2026-09-21 隔离实验）。
+% `\topfraction` 默认 0.7 = “页顶浮动最多占文本区的 70%”；而 tab_instances
+% （12 列两栏）约占文本区 80%，直接算不合格、放不了页顶 → 进浮动队列 →
+% 而浮动体**不允许超越排在它前面的同类浮动体** → 一张卡住、后面全部卡住，
+% 最终 8 张表全被推到文档末尾（页眉还写着“参考文献”）。
+% 实测对照（(a) 段已拆栏、其余不变）：
+%   默认配额 + 无 \clearpage → 2 张表溢出，判据失败
+%   配额 0.92 + 无 \clearpage → 通过（18 页）
+%   配额 0.92 + \clearpage   → 通过（19 页）
+%   默认配额 + \clearpage    → 通过（20 页）
+% 结论：**放宽配额是主因修复**；\clearpage 是结构性保险（值 1 页）。
+\renewcommand{\topfraction}{0.92}       % 页顶浮动最多占 92% 文本高
+\renewcommand{\bottomfraction}{0.85}    % 页底浮动最多占 85%
+\renewcommand{\textfraction}{0.06}      % 页内正文最少占 6%（不与浮动抢位置）
+\renewcommand{\floatpagefraction}{0.72} % 独占浮动页须填充 72% 以上
+\setcounter{topnumber}{3}               % 一页最多 3 个页顶浮动体
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{4}             % 一页最多 4 个浮动体
+
 \newcommand{\hv}{\mathrm{HV}}
 \newcommand{\imwr}{I_{\mathrm{mwr}}}
 \newcommand{\imix}{I_{\mathrm{mix3}}}
@@ -763,7 +782,15 @@ $\AnytimeTenXPct\%$ 的相对增幅。
 我们希望本文的方法学部分——口径纪律、目标量对齐、置换零假设、
 以及“把结论放到未调参实例上”——对同类复现工作有直接的可操作性。
 
+% **必须在参考文献之前清空浮动队列**。LaTeX 的浮动体不能超越排在它前面的同类
+% 浮动体；一旦某张表积压，后面所有表跟着积压，最终整批表都会被推到
+% \end{document} 前——实测 8 张表全部排到参考文献之后，页眉还写着“参考文献”
+% （读者在 §3 看到“见表 2”，要翻到第 16 页才找得到）。
+% \clearpage 强制把所有未就位的浮动体现在就排掉，代价是可能出现半空页。
+\clearpage
+
 \begin{thebibliography}{9}
+\phantomsection\label{sec:refs}
 \bibitem{li2022rmoead}
 J. Li, et al.
 \newblock A reinforcement learning based RMOEA/D for bi-objective fuzzy flexible

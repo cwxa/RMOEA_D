@@ -1,5 +1,11 @@
 *.pyc
 *.log
+# LaTeX 编译中间产物：`paper/build.py` 传 --keep-intermediates 后才会落盘
+# （浮动体位置判据要读 main.aux 里的页码）。PDF 本身是交付物，**不忽略**。
+paper/*.aux
+paper/*.out
+paper/*.toc
+paper/*.xdv
 _*.txt
 _*.json
 _*.py

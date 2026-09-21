@@ -3708,5 +3708,164 @@ class TestTableCaptionsDeclareTheirContent(unittest.TestCase):
                       "“-1%” 或 “-1.0%” 都会与正文漂移")
 
 
+class TestPaperFloatPlacement(unittest.TestCase):
+    """缺陷 44 回归锁：表/图不得被排到参考文献之后。
+
+    实测事故（2026-09-21）：8 张表全部排在第 16--19 页，而那几页的页眉写着
+    "参考文献"——读者在 §3 看到"见表 2"，要翻到第 16 页才找得到。
+
+    **根因是浮动配额**，不是直觉会怀疑的 `pos`。隔离实验：
+
+    | pos    | `\\topfraction` | `\\clearpage` | 判据 |
+    |--------|-----------------|---------------|------|
+    | `t`    | 0.7（默认）      | 无            | ❌ 2 张表溢出 |
+    | `t`    | 0.92            | 无            | ✅ 18 页 |
+    | `t`    | 0.92            | 有            | ✅ 19 页 |
+    | `t`    | 0.7（默认）      | 有            | ✅ 20 页 |
+    | `htbp` | 0.92            | 有            | ✅ 19 页 |
+
+    所以本类锁四样东西：配额别被删、参考文献前别丢 `\\clearpage`、
+    `table_wrap` 的 `pos` 别退回 `t`、以及**判据必须真的接在 build 流程上**
+    （helper 写对了、调用方没接，是缺陷 18/29/43 的同款事故）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        cls.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        spec = importlib.util.spec_from_file_location(
+            "_paper_build_fx", os.path.join(cls.root, "paper", "build.py"))
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def _read(self, *parts):
+        with io.open(os.path.join(self.root, *parts), encoding="utf-8") as fh:
+            return fh.read()
+
+    # ── 判据本身：合成 .aux，双向验证 ──────────────────────────────
+    AUX_HDR = "\\relax\n"
+
+    def test_floats_after_refs_flags_a_late_table(self):
+        aux = ('\\newlabel{tab:instances}{{2}{9}{}{}{}}\n'
+               '\\newlabel{tab:hurink}{{7}{18}{}{}{}}\n'
+               '\\newlabel{sec:refs}{{}{17}{}{}{}}\n')
+        bad, refs = self.mod.floats_after_refs(aux)
+        self.assertEqual(refs, 17)
+        self.assertEqual([b[0] for b in bad], ["tab:hurink"],
+                         "排在第 18 页的表必须被判定为在参考文献之后")
+
+    def test_floats_after_refs_passes_when_all_are_early(self):
+        aux = ('\\newlabel{tab:hurink}{{7}{15}{}{}{}}\n'
+               '\\newlabel{fig:gate}{{6}{16}{}{}{}}\n'
+               '\\newlabel{sec:refs}{{}{19}{}{}{}}\n')
+        bad, refs = self.mod.floats_after_refs(aux)
+        self.assertEqual((bad, refs), ([], 19))
+
+    def test_floats_after_refs_yields_unknown_without_the_baseline_label(self):
+        """拿不到基准页要报"未知"（`None`），**不能默认通过**。
+
+        若默认返回空表，`\\label{sec:refs}` 一旦被误删，判据就会永远绿灯——
+        正是缺陷 43 的形态（判据还在跑，但查不出任何东西）。
+        """
+        bad, refs = self.mod.floats_after_refs(
+            "\\newlabel{tab:hurink}{{7}{18}{}{}{}}\n")
+        self.assertIsNone(refs, "缺基准页时必须让调用方知道，而不是静默通过")
+
+    # ── 主机侧：配额、clearpage、label 三件套都在 ──────────────────
+    def test_float_quota_is_raised_in_the_preamble(self):
+        tex = self._read("paper", "main.tex")
+        m = re.search(r"\\renewcommand\{\\topfraction\}\{([\d.]+)\}", tex)
+        self.assertIsNotNone(m, "main.tex 里没有 \\topfraction —— 表格会重新堆积到"
+                                "参考文献之后（缺陷 44）")
+        self.assertGreaterEqual(float(m.group(1)), 0.9,
+                                "\\topfraction=%.2f 太紧：大表放不进页顶就会连锁积压"
+                                % float(m.group(1)))
+
+    def test_bibliography_is_preceded_by_clearpage_and_has_a_page_label(self):
+        tex = self._read("paper", "main.tex")
+        i = tex.find("\\begin{thebibliography}")
+        self.assertGreater(i, 0, "找不到 thebibliography")
+        head = tex[:i]
+        # `\clearpage` 必须在**未被注释**的行上
+        live = [l for l in head.split("\n") if l.strip().startswith("\\clearpage")]
+        self.assertTrue(live, "参考文献之前没有生效的 \\clearpage —— 浮动队列不会被"
+                              "清空，表可能又被推到文献之后（缺陷 44）")
+        self.assertIn("\\label{sec:refs}", tex[i:],
+                      "参考文献处缺 \\label{sec:refs}：页码基准没了，"
+                      "build.py 的浮动体判据会退化成跳过不查")
+
+    def test_table_wrap_default_position_is_not_top_only(self):
+        src = self._read("scripts", "paper_export.py")
+        m = re.search(r'def table_wrap\([^)]*pos="([a-z]+)"', src, re.S)
+        self.assertIsNotNone(m, "找不到 table_wrap 的 pos 默认值")
+        self.assertNotEqual(m.group(1), "t",
+                            "table_wrap 的 pos 退回了 [t]：可落位位置只剩页顶，"
+                            "放不下就会连锁积压（缺陷 44）")
+
+    def test_the_float_judgement_is_wired_into_build(self):
+        """AST 锁调用点：判据必须真的在 build 流程里被调用。
+
+        helper 写对 ≠ 接对线（缺陷 18/29/43 都是这个形态）。
+        """
+        import ast
+        src = self._read("paper", "build.py")
+        calls = [n for n in ast.walk(ast.parse(src))
+                 if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name)
+                 and n.func.id == "floats_after_refs"]
+        self.assertTrue(calls, "build.py 没有调用 floats_after_refs —— 判据没接上")
+        # 且返回值必须被用于"失败即返回非零"
+        src_main = src[src.find("def main():"):]
+        self.assertIn("return 4", src_main,
+                      "判据不通过时要返回非零退出码，否则 CI/收尾脚本看不出失败")
+
+
+class TestLiteralScannerSkipsPreamble(unittest.TestCase):
+    """数字扫描器必须**只扫正文**，导言区整段不算（缺陷 44 的伴生修复）。
+
+    导言区是配置（版式尺寸、浮动配额、行距），里面的数字与实验结果无关，
+    却会和结果宏撞值：把 `\\bottomfraction` 设成 0.85、`\\textfraction` 设成
+    0.06，当场撞上 `\\HKaccRejectAll`(=0.85) 与 `\\PSmkNineMargin`(=0.06)，
+    正向扫描报"数字有两处来源"。靠逐个加关键字豁免治不了根——下次换个参数名
+    又会出现；切在 `\\begin{document}` 上一次封死。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        cls.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        spec = importlib.util.spec_from_file_location(
+            "_check_lit", os.path.join(cls.root, "scripts", "check_paper_literals.py"))
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    SRC = ("% 注释里的 0.85 不算\n"
+           "\\renewcommand{\\bottomfraction}{0.85}\n"
+           "\\begin{document}\n"
+           "正文里的 0.85 才算。\n")
+
+    def test_preamble_numbers_are_not_scanned(self):
+        body = self.mod.strip_comments_and_inputs(self.SRC)
+        self.assertNotIn("bottomfraction", body,
+                         "导言区没有被剥掉：配置参数会与结果宏撞值（缺陷 44）")
+        self.assertIn("正文里的 0.85", body, "正文不能被误删")
+
+    def test_body_only_preserves_line_numbers(self):
+        """行号必须保持——否则反向扫描报出的行号会指到错的行上。"""
+        out = self.mod.body_only(self.SRC)
+        self.assertEqual(out.count("\n"), self.SRC.count("\n"),
+                         "body_only 改变了行数：反向扫描的行号会整体前移")
+        src_lines = self.SRC.split("\n")
+        out_lines = out.split("\n")
+        for i, l in enumerate(out_lines):
+            if l.strip():
+                self.assertEqual(l, src_lines[i],
+                                 "第 %d 行内容被移动了" % (i + 1))
+
+    def test_body_only_is_a_noop_without_begin_document(self):
+        s = "\\renewcommand{\\topfraction}{0.9}\n"
+        self.assertEqual(self.mod.body_only(s), s)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -117,6 +117,45 @@ def resolve(rel):
     return None
 
 
+_NEWLABEL_RE = re.compile(r"\\newlabel\{([^}]+)\}\{\{([^}]*)\}\{([^}]*)\}")
+
+
+def floats_after_refs(aux):
+    """检查"表/图是否被排到了参考文献之后"。
+
+    **2026-09-21 实测事故**：8 张表全部排到了参考文献之后（第 16--19 页），
+    而那几页的页眉还写着"参考文献"。读者在 §3 看到"见表 2"，要翻到第 16 页
+    才找得到。
+
+    **根因（隔离实验定出来的，别凭直觉归因）**：`\\topfraction` 默认 0.7，
+    意思是"页顶浮动最多占文本区的 70%"；而大表占 ~80%，直接不合格、
+    放不了页顶 → 进浮动队列 → 浮动体**不允许超越排在它前面的同类浮动体**
+    → 一张卡住、全部卡住 → 整批被推到文档末尾。
+    实测对照：默认配额 + 无 `\\clearpage` → 失败；配额放宽到 0.92 → 通过（18 页）；
+    只加 `\\clearpage` 也能通过但要 20 页。**`pos` 从 `[t]` 放宽到 `[htbp]` 不改变结果。**
+
+    为什么用 `.aux` 而不是读 PDF：`\\newlabel{tab:x}{{2}{9}...}` 里的第二个字段
+    就是**页码**，纯文本、零第三方依赖、每轮编译都自动更新；而 PDF 文本层对
+    中文 CMap 不可靠（pypdf 会解成乱码），不值当为这一条判据引依赖。
+
+    需要 `main.tex` 在参考文献处放一个 `\\label{sec:refs}` 作为基准页。
+    返回 ``(排在参考文献之后的 [(标签, 页, 参考文献页), ...], 参考文献页或 None)``。
+    """
+    refs_page = None
+    items = []
+    for lab, _num, page in _NEWLABEL_RE.findall(aux):
+        if not page.isdigit():
+            continue
+        if lab == "sec:refs":
+            refs_page = int(page)
+        elif lab.startswith("tab:") or lab.startswith("fig:"):
+            items.append((lab, int(page)))
+    if refs_page is None:
+        return [], None                 # 拿不到基准页 -> 由调用方提示，不误判
+    bad = [(lab, pg, refs_page) for lab, pg in sorted(items) if pg > refs_page]
+    return bad, refs_page
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -199,7 +238,11 @@ def main():
     env = dict(os.environ)
     env["TECTONIC_CACHE_DIR"] = CACHE
     env["PYTHONIOENCODING"] = "utf-8"
-    rc, out = run([TECTONIC, "-X", "compile", args.tex, "--keep-logs"], env=env)
+    # `--keep-intermediates` 是判据 [3b/3] 的前提：Tectonic 默认**不写** `.aux`，
+    # 而"表/图是否排到参考文献之后"只能从 `\newlabel` 里的页码读出来。
+    # 实测（`tectonic -X compile --help`）：`-k, --keep-intermediates`。
+    rc, out = run([TECTONIC, "-X", "compile", args.tex,
+                   "--keep-logs", "--keep-intermediates"], env=env)
     tail = [l for l in out.split("\n") if l.strip()][-12:]
     print("\n".join(tail))
     pdf = os.path.join(HERE, os.path.splitext(args.tex)[0] + ".pdf")
@@ -224,6 +267,27 @@ def main():
     if over:
         print("   （提示：%d 处亚毫米级超宽，纸面不可见，按逾限阈值 %.1f pt 放行）"
               % (len(over), OVER_TOL_PT))
+
+    print("\n" + "=" * 92)
+    print("[3b/3] 浮动体位置：表/图不得排到参考文献之后")
+    print("=" * 92)
+    auxpath = os.path.join(HERE, os.path.splitext(args.tex)[0] + ".aux")
+    aux = (io.open(auxpath, encoding="utf-8", errors="replace").read()
+           if os.path.exists(auxpath) else "")
+    late, refs_page = floats_after_refs(aux)
+    if refs_page is None:
+        print("  [提示] %s 里找不到 \\label{sec:refs}，跳过本项（不影响编译）"
+              % os.path.basename(auxpath))
+    elif late:
+        for lab, pg, rp in late[:12]:
+            print("  [!!] %-16s 排在第 %d 页，参考文献在第 %d 页 —— 读者找不到"
+                  % (lab, pg, rp))
+        print("\n[失败] 有 %d 个表/图排在参考文献之后。检查：① 表的 pos 不要只给 "
+              "[t]；② 参考文献前要有 \\clearpage 清空浮动队列（缺陷 44）。"
+              % len(late))
+        return 4
+    else:
+        print("  全部表/图都排在参考文献（第 %d 页）之前" % refs_page)
     return 0
 
 

@@ -1,6 +1,6 @@
-\begin{table}[t]
+\begin{table}[htbp]
   \centering
-  \caption{实例集特征：(a) 开发集 Brandimarte Mk01--Mk10（只占左栏）；(b) 留出集 Hurink $e$-data，按 (工件, 机器, 工序) 分组合并后续排为左右两栏}
+  \caption{实例集特征：(a) 开发集 Brandimarte Mk01--Mk10；(b) 留出集 Hurink $e$-data，按 (工件, 机器, 工序) 分组合并。两段均续排为左右两栏}
   \label{tab:instances}
   \footnotesize
   {\setlength{\tabcolsep}{4pt}%
@@ -10,16 +10,11 @@
     \cmidrule(lr){1-12}
     \textit{实例} & \textit{工件} & \textit{机器} & \textit{工序} & \textit{弹性比} & \textit{$c_v$} & \textit{实例} & \textit{工件} & \textit{机器} & \textit{工序} & \textit{弹性比} & \textit{$c_v$} \\
     \midrule
-    Mk01 & 10 & 6 & 55 & 2.09 & 0.56 &  &  &  &  &  &  \\
-    Mk02 & 10 & 6 & 58 & 4.10 & 0.50 &  &  &  &  &  &  \\
-    Mk03 & 15 & 8 & 150 & 3.01 & 0.63 &  &  &  &  &  &  \\
-    Mk04 & 15 & 8 & 90 & 1.91 & 0.63 &  &  &  &  &  &  \\
-    Mk05 & 15 & 4 & 106 & 1.71 & 0.32 &  &  &  &  &  &  \\
-    Mk06 & 10 & 10 & 150 & 3.27 & 0.63 &  &  &  &  &  &  \\
-    Mk07 & 20 & 5 & 100 & 2.83 & 0.64 &  &  &  &  &  &  \\
-    Mk08 & 20 & 10 & 225 & 1.43 & 0.48 &  &  &  &  &  &  \\
-    Mk09 & 20 & 10 & 240 & 2.52 & 0.43 &  &  &  &  &  &  \\
-    Mk10 & 20 & 15 & 240 & 2.98 & 0.47 &  &  &  &  &  &  \\
+    Mk01 & 10 & 6 & 55 & 2.09 & 0.56 & Mk06 & 10 & 10 & 150 & 3.27 & 0.63 \\
+    Mk02 & 10 & 6 & 58 & 4.10 & 0.50 & Mk07 & 20 & 5 & 100 & 2.83 & 0.64 \\
+    Mk03 & 15 & 8 & 150 & 3.01 & 0.63 & Mk08 & 20 & 10 & 225 & 1.43 & 0.48 \\
+    Mk04 & 15 & 8 & 90 & 1.91 & 0.63 & Mk09 & 20 & 10 & 240 & 2.52 & 0.43 \\
+    Mk05 & 15 & 4 & 106 & 1.71 & 0.32 & Mk10 & 20 & 15 & 240 & 2.98 & 0.47 \\
     \midrule
     \multicolumn{12}{l}{\textit{(b) Hurink $e$-data：66 个实例，全部用作\textbf{独立留出集}（不挑选）}}\\
     \cmidrule(lr){1-12}
@@ -42,5 +37,5 @@
     \bottomrule
   \end{tabular}
   }
-  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}弹性比 = 每道工序可选机器数的均值；$c_v$ = 模糊三角加工时间的变异系数。Mk01--Mk10 用于复现、消融与\textbf{门限标定}。Hurink $e$-data 共 66 个实例，规模 36--300 道工序；(b) 段左右两栏续排，按 (工件, 机器, 工序) 分组合并，$\times c$ 为组内实例数。全部实例都进留出集，\textbf{没有任何按结果的事后挑选}。\end{minipage}
+  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}弹性比 = 每道工序可选机器数的均值；$c_v$ = 模糊三角加工时间的变异系数。Mk01--Mk10 用于复现、消融与\textbf{门限标定}；(a) 段 10 行续排为 5+5。Hurink $e$-data 共 66 个实例，规模 36--300 道工序；(b) 段左右两栏续排，按 (工件, 机器, 工序) 分组合并，$\times c$ 为组内实例数。全部实例都进留出集，\textbf{没有任何按结果的事后挑选}。\end{minipage}
 \end{table}

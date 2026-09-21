@@ -183,8 +183,27 @@ def save_fig(fig, name):
     print("  -> paper/figures/%s (+ .png)" % name)
 
 
-def table_wrap(caption, label, body, colspec, notes=None, pos="t",
+def table_wrap(caption, label, body, colspec, notes=None, pos="htbp",
                font="\\small", colsep=None):
+    """把表体包成浮动体。
+
+    `pos` 默认 **`htbp`**（此处/页顶/页底/浮动页），给 LaTeX 更多落位选择。
+    2026-09-21 的**隔离实验**（(a) 段已拆栏、其余不变）：
+
+    | pos      | `\\topfraction` | `\\clearpage` | 页数 | 结果 |
+    |----------|-----------------|---------------|------|------|
+    | `t`      | 0.7（默认）      | 无            | —    | ❌ 2 张表溢出到参考文献后 |
+    | `t`      | 0.92            | 无            | 18   | ✅ |
+    | `t`      | 0.92            | 有            | 19   | ✅ |
+    | `t`      | 0.7（默认）      | 有            | 20   | ✅ |
+    | `htbp`   | 0.92            | 有            | 19   | ✅ |
+
+    → **主因是浮动配额，不是 `pos`**：`\\topfraction=0.7` 让大表放不进页顶，
+    一进队列就因"浮动体不能超越前一个"连锁积压，最后整批排到参考文献之后。
+    `pos` 从 `t` 放宽到 `htbp` 本身**不改变结果**（都是 19 页），
+    但它是**降低积压风险**的一层——积压的起因就是"没地方放"。
+    `\\clearpage` 提供结构性保证，代价约 1 页。
+    """
     tab = ["  \\begin{tabular}{%s}" % colspec, "    \\toprule", body,
            "    \\bottomrule", "  \\end{tabular}"]
     if colsep is not None:
@@ -262,8 +281,14 @@ def pair_over(hv, a, b, instances):
 def tab_instances(data, allow_missing):
     """实例集特征表。**必须排成两栏**：开发集 10 行 + Hurink 分组约 30 行，
     单栏时整表比 A4 文本区还高，LaTeX 会报 "Float too large for page"
-    并把表强行排出页面（2026-09-19 实测超出 97 pt）。这里统一用 12 列
-    （左右各 6 列）续排，(a) 段右侧留空。
+    并把表强行排出页面（2026-09-19 实测超出 97 pt）。
+
+    这里**两段都用 12 列（左右各 6 列）续排**。
+    早先 (a) 段只填左栏、右栏空着六列（当时的注释写"（a）段右侧留空"），
+    结果是页面上出现**半张表宽的空白**；而且 (a) 段 10 行不变高，
+    整表高度顶到文本区的 ~80%，超过 `\\topfraction`（默认 0.7），
+    于是它**无法放在页顶**、只能排成浮动页，并被一路推到参考文献之后。
+    (a) 段拆成 5+5 续排后：横向填满、纵向减半，两个毛病一起消失。
     """
     from rmoea_d.core.instance import load_instance
     rows_mk = []
@@ -283,9 +308,13 @@ def tab_instances(data, allow_missing):
             "复现与消融的开发集}}\\\\", "    \\cmidrule(lr){1-12}",
             "    %s & %s \\\\" % (HEAD6, HEAD6),
             "    \\midrule"]
-    for n, j, m, o, fx, cv in rows_mk:
-        body.append("    %s & %d & %d & %d & %.2f & %.2f & %s \\\\"
-                    % (n, j, m, o, fx, cv, BLANK6))
+    # (a) 段也左右续排：10 行拆成 5+5，横向填满整表宽、纵向高度减半。
+    mk_cells = ["%s & %d & %d & %d & %.2f & %.2f" % (n, j, m, o, fx, cv)
+                for n, j, m, o, fx, cv in rows_mk]
+    half_mk = (len(mk_cells) + 1) // 2
+    for k in range(half_mk):
+        r = mk_cells[half_mk + k] if half_mk + k < len(mk_cells) else BLANK6
+        body.append("    %s & %s \\\\" % (mk_cells[k], r))
 
     meta = None
     if need(os.path.join(ROOT, "data", "hurink", "PROVENANCE.json"), allow_missing,
@@ -293,7 +322,8 @@ def tab_instances(data, allow_missing):
         meta = load_json(os.path.join(ROOT, "data", "hurink", "PROVENANCE.json"))
     n_hed = 0
     notes = ("弹性比 = 每道工序可选机器数的均值；$c_v$ = 模糊三角加工时间的变异系数。"
-             "Mk01--Mk10 用于复现、消融与\\textbf{门限标定}。")
+             "Mk01--Mk10 用于复现、消融与\\textbf{门限标定}；"
+             "(a) 段 10 行续排为 5+5。")
     if meta:
         grp = collections.defaultdict(int)
         for k, v in meta.items():
@@ -323,9 +353,9 @@ def tab_instances(data, allow_missing):
         body.append("    \\midrule\n    \\multicolumn{12}{l}{\\textit{"
                     "Hurink 留出集数据未就绪}}\\\\")
     write_tex("tab_instances.tex", table_wrap(
-        "实例集特征：(a) 开发集 Brandimarte Mk01--Mk10（只占左栏）；"
-        "(b) 留出集 Hurink $e$-data，按 (工件, 机器, 工序) 分组合并后"
-        "续排为左右两栏",
+        "实例集特征：(a) 开发集 Brandimarte Mk01--Mk10；"
+        "(b) 留出集 Hurink $e$-data，按 (工件, 机器, 工序) 分组合并。"
+        "两段均续排为左右两栏",
         "tab:instances", "\n".join(body),
         "lrrrrr@{\\hspace{10pt}}lrrrrr", font="\\footnotesize", colsep=4,
         notes=notes))
