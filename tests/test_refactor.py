@@ -3482,15 +3482,41 @@ class TestNoStaleCaliberClaims(unittest.TestCase):
     `init_variant_analysis.py`），最危险。
 
     本锁扫 scripts/*.py 的**字符串常量**（AST，注释不算 —— 注释里记录勘误是对的）。
+
+    ⚠️ **2026-09-21 加固（缺陷 51）**：与文档侧同病 —— 只认旧句式 `不受盒影响`，
+    漏掉了**肯定式**变体"某个量**可跨盒/跨批**比较/引用"。现两种句式都扫；
+    否定词（不/勿/禁/无）与"同一盒内"用于放行**正确**的限定语
+    （如 `hv_box.py` 的"跨批次引用一律无效"）。
+
+    白名单：`mutation_check_*.py` 是**故意**把错误断言当锚点写进去的验证工具，
+    豁免（同 `hv_box.py` 在 CLI 锁里豁免的理由）。
     """
 
     PAT = re.compile(r"不受盒影响|不受盒|与盒无关|不受口径|口径无影响")
+    PAT_CROSS = re.compile(r"跨(?:批次|批|盒|口径)[^。；\n]{0,14}?(?:比|引用)")
+    SUBJECT = re.compile(r"\bp\b|\bwins\b|\bdz\b|符号|ΔHV|\\Delta")
+    NEG = re.compile(r"不|勿|禁|无|同一盒内")
+
+    def _scan_const(self, val):
+        """返回该字符串常量里的可疑片段（两个句式都查）。"""
+        out = []
+        for m in self.PAT.finditer(val):
+            out.append(val[max(0, m.start() - 35):m.end() + 25])
+        for m in self.PAT_CROSS.finditer(val):
+            lo, hi = max(0, m.start() - 40), m.end() + 40
+            if not self.SUBJECT.search(val[lo:hi]):
+                continue
+            # 否定词可能在片段**之后**（"跨批次引用一律无效"）→ 两侧都取
+            if self.NEG.search(val[max(0, m.start() - 8):m.end() + 6]):
+                continue
+            out.append(val[max(0, m.start() - 35):m.end() + 25])
+        return out
 
     def test_no_stale_claim_in_scripts(self):
         sdir = os.path.join(os.path.dirname(__file__), "..", "scripts")
         bad = []
         for fn in sorted(os.listdir(sdir)):
-            if not fn.endswith(".py"):
+            if not fn.endswith(".py") or fn.startswith("mutation_check_"):
                 continue
             with io.open(os.path.join(sdir, fn), encoding="utf-8") as fh:
                 try:
@@ -3499,13 +3525,12 @@ class TestNoStaleCaliberClaims(unittest.TestCase):
                     continue
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    for m in self.PAT.finditer(node.value):
-                        seg = node.value[max(0, m.start() - 35):m.end() + 25]
+                    for seg in self._scan_const(node.value):
                         bad.append("%s:%d  ...%s..." % (fn, node.lineno,
                                                         seg.replace("\n", " ")))
         self.assertEqual(
             bad, [],
-            "以下字符串仍在断言'口径无关'（缺陷 25/30/39 已推翻）：\n  " + "\n  ".join(bad))
+            "以下字符串仍在断言'口径无关'（缺陷 25/30/39/51 已推翻）：\n  " + "\n  ".join(bad))
 
     def test_the_two_runtime_prints_are_fixed(self):
         """点对点：两个曾把错误断言打印进日志的脚本，现在必须打印口径警告。"""
@@ -4093,11 +4118,25 @@ class TestDocsDoNotAssertRetractedCaliberClaims(unittest.TestCase):
     本锁按"**断言 vs 引用**"区分：更正性地引用这句话（同句带"曾写 / 是错的"
     等撤回标记）是允许的；**直接断言**才失败。
     正确表述：**同一盒内可比；跨盒、跨口径一律不可引用，包括 p 与 wins**。
+
+    ⚠️ **2026-09-21 加固（缺陷 51）**：本锁最初只认一种**句式**——`不受口径影响`。
+    而同一论断的"现代变体"是**肯定式**："只有 ΔHV / p / wins **可跨批次安全比较**"，
+    它不含"不受…影响"字样，于是三条断言（`paper-vs-reproduction.md`、
+    `qpas-optimization-plan.md` ×2）**全部漏网**，且与同文档顶部勘误框自相矛盾。
+    教训：**判据要按"论断的语义族"写，不按"上一次出现时的字面句式"写**——
+    与缺陷 43（判据只读 `.log` 而告警在 stderr）是同一种失效。
+    现同时匹配两种句式；否定词（不/勿/禁）与白名单（"同一盒内"）用于放行正确表述。
     """
 
-    CLAIM = re.compile(r"不受(?:口径|盒)?影响")
-    SUBJECT = re.compile(r"\bp\b|\bwins\b|\bdz\b|符号")
+    # 旧句式（缺陷 49）："不受口径/盒影响"
+    CLAIM_OLD = re.compile(r"不受(?:口径|盒)?影响")
+    # 新句式（缺陷 51）："跨盒/跨批/跨口径 …… 比/引用"（肯定式）
+    CLAIM_CROSS = re.compile(r"跨(?:批次|批|盒|口径)[^。；\n]{0,14}?(?:比|引用)")
+    SUBJECT = re.compile(r"\bp\b|\bwins\b|\bdz\b|符号|ΔHV|\\Delta|[A-Z]HV")
     RETRACT = re.compile(r"曾写|原先写|原框|是错的|错的|更正|勘误|撤回|不可引用")
+    # 只对 CLAIM_CROSS 生效：片段的**前 8 字符到片段末**含否定词或"同一盒内"，
+    # 说明这是**正确的**限定语（"不得跨批次比"/"跨盒一律不可引用"/"同一盒内可比"）。
+    NEG = re.compile(r"不|勿|禁|无|同一盒内")
 
     def test_no_doc_asserts_the_retracted_claim(self):
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -4111,21 +4150,29 @@ class TestDocsDoNotAssertRetractedCaliberClaims(unittest.TestCase):
             with io.open(os.path.join(docdir, name), encoding="utf-8") as fh:
                 lines = fh.read().splitlines()
             for i, line in enumerate(lines):
-                m = self.CLAIM.search(line)
-                if not m:
+                cand = [(m, True) for m in self.CLAIM_OLD.finditer(line)]
+                cand += [(m, False) for m in self.CLAIM_CROSS.finditer(line)]
+                if not cand:
                     continue
-                # 只在"这句话在说 p / wins / dz"时才管（避免误伤无关用法）
-                lo, hi = max(0, m.start() - 40), m.end() + 40
-                if not self.SUBJECT.search(line[lo:hi]):
-                    continue
-                # 同句或上一句带撤回标记 -> 更正性引用，放行
-                ctx = "\n".join(lines[max(0, i - 1):i + 1])
-                if self.RETRACT.search(ctx):
-                    continue
-                bad.append((name, i + 1, line.strip()[:90]))
+                for m, is_old in cand:
+                    # 只在"这句话在说 p / wins / dz / ΔHV"时才管（避免误伤无关用法）
+                    lo, hi = max(0, m.start() - 40), m.end() + 40
+                    if not self.SUBJECT.search(line[lo:hi]):
+                        continue
+                    # 同句或上一句带撤回标记 -> 更正性引用，放行
+                    ctx = "\n".join(lines[max(0, i - 1):i + 1])
+                    if self.RETRACT.search(ctx):
+                        continue
+                    # 否定/白名单只用于新句式（旧句式本身含"不"字，不能这样筛）
+                    # 否定词也可能在片段之后（"跨批次引用一律无效"）→ 两侧都取
+                    if (not is_old) and self.NEG.search(
+                            line[max(0, m.start() - 8):m.end() + 6]):
+                        continue
+                    bad.append((name, i + 1, line.strip()[:90]))
+                    break
         self.assertEqual(
             [], bad,
-            "以下文档仍在**断言**已被缺陷 25/39 撤回的说法——"
+            "以下文档仍在**断言**已被缺陷 25/39/51 撤回的说法——"
             "正确表述是“同一盒内可比；跨盒、跨口径一律不可引用，包括 p 与 wins”：%s"
             % bad)
 
