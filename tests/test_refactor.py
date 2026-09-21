@@ -4138,17 +4138,49 @@ class TestDocsDoNotAssertRetractedCaliberClaims(unittest.TestCase):
     # 说明这是**正确的**限定语（"不得跨批次比"/"跨盒一律不可引用"/"同一盒内可比"）。
     NEG = re.compile(r"不|勿|禁|无|同一盒内")
 
-    def test_no_doc_asserts_the_retracted_claim(self):
+    def _doc_files(self):
+        """**全部**需要检查的文档：`docs/**/*.md`（递归）+ 仓库根级 `*.md`。
+
+        ⚠️ **2026-09-21 加固（缺陷 53）**：本锁原先用 `os.listdir(docs)`，
+        **不递归**，也没有根级文档 —— 于是
+        `docs/superpowers/{plans,specs}/*.md`、`readme.md`、`doc.md`
+        **从未被任何口径守卫看过**。这不是"恰好干净"，而是**静默豁免**：
+        覆盖面由"glob 恰好展开成什么"决定，而不是由"哪些文档需要检查"决定。
+        与缺陷 43 / 51 同族 —— 检查器看着在工作，只是没盯着会出问题的那一面。
+        现在覆盖面 = 文档全集，并由 `test_scan_covers_every_document` 钉住。
+        """
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        docdir = os.path.join(root, "docs")
-        if not os.path.isdir(docdir):
-            self.skipTest("docs/ 不存在")
+        out = []
+        for dirpath, _dirs, names in os.walk(os.path.join(root, "docs")):
+            for n in names:
+                if n.endswith(".md"):
+                    out.append(os.path.join(dirpath, n))
+        for n in os.listdir(root):
+            p = os.path.join(root, n)
+            if n.endswith(".md") and os.path.isfile(p):
+                out.append(p)
+        return sorted({os.path.normpath(p) for p in out})
+
+    def test_scan_covers_every_document(self):
+        """防空扫 + 防静默豁免：文档全集必须都在扫描范围内（缺陷 53）。"""
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        files = self._doc_files()
+        self.assertGreaterEqual(
+            len(files), 12,
+            "只找到 %d 份文档，疑似扫描范围又退化成非递归（缺陷 53）" % len(files))
+        names = [os.path.relpath(f, root) for f in files]
+        for must in ("readme.md", "docs/optimization-report.md",
+                     "docs/superpowers/plans/2026-05-05-rmoea-d-implementation.md"):
+            self.assertIn(must, [n.replace(os.sep, "/") for n in names],
+                          "文档 %s 不在扫描范围内（静默豁免）" % must)
+
+    def test_no_doc_asserts_the_retracted_claim(self):
         bad = []
-        for name in sorted(os.listdir(docdir)):
-            if not name.endswith(".md"):
-                continue
-            with io.open(os.path.join(docdir, name), encoding="utf-8") as fh:
+        for path in self._doc_files():
+            with io.open(path, encoding="utf-8") as fh:
                 lines = fh.read().splitlines()
+            name = os.path.relpath(path, os.path.abspath(
+                os.path.join(os.path.dirname(__file__), ".."))).replace(os.sep, "/")
             for i, line in enumerate(lines):
                 cand = [(m, True) for m in self.CLAIM_OLD.finditer(line)]
                 cand += [(m, False) for m in self.CLAIM_CROSS.finditer(line)]

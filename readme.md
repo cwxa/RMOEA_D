@@ -80,16 +80,22 @@ RMOEA_D/
 │   ├── phase_oracle.py                  # ★ G1/G2 诊断: 相位 oracle + 状态可观测性 (T 维度是否还有可实现空间)
 │   ├── aba_holdout.py                   # ★ ABA 留出集确认 (逐实例 H1 + 合并敏感性 + 方向一致性)
 │   ├── eqc_compare.py                   # ★ 等算力对照 (时间比+显著性 -> 杠杆是不是纯算力效应)
+│   ├── t_caliber_check.py               # ★ 实例边界口径的 T 扫描标准复核 (缺陷 39 配套工具, --extra 支持任意臂)
+│   ├── check_paper_literals.py          # ★ 论文数字"一个来源"双向扫描 (宏 <-> 正文, 缺陷 34/39)
+│   ├── check_doc_commands.py            # ★ 文档复现命令可执行性 + 覆盖面守卫 (缺陷 19/50/53)
+│   ├── mutation_check_aig.py            # ★ 变异测试: AIG 判据锁是否有区分度
+│   ├── mutation_check_caliber_claim.py  # ★ 变异测试: 撤回口径论断是否被锁住 (含根级 readme.md)
 │   └── hv_box.py                        # ★ 归一化盒口径冻结 (盒指纹/臂集落盘, 判定绝对 HV 能否跨批比较)
 │
 ├── tests/                               # 单元测试
-│   └── test_refactor.py                 # 重构验证 + 消融/阶梯/ABA/盒指纹/等算力判定的回归锁 (113 cases)
+│   └── test_refactor.py                 # 重构验证 + 消融/阶梯/盒指纹/口径覆盖面等回归锁 (用例数见 `pytest -q`)
 │
 ├── data/                                # Brandimarte 原始实例 (Mk01~Mk10.fjs)
 ├── test_cases/                          # 固定测试用例 (seed=42)
 ├── logs/                                # 详细日志文件 (rmoea_d_{ts}.log)
-├── results/                             # 实验结果
-│   ├── experiment/                      # ★ 统一实验主数据源 (每次 seed 产出 4 变体)
+├── results/                             # 旧流水线 (main.py / run_all.py) 的实验结果
+│   ├── experiment/                      # ⚠ **盒口径 + 修复前旧代码**产物, 勿与 logs/ 的 final_hv 混用
+│   │                                    #   (口径见本文件「HV 归一化口径」第 4 条; 论文不复用本目录)
 │   │   ├── mk01/
 │   │   │   └── run_{seed}_rmoea_{exp_id}.json   # 含 rmoea_d/qpas_only/rvns_only/moea_d + fuzzy_makespan/fuzzy_workload
 │   │   ├── ...
@@ -197,8 +203,10 @@ python main.py run_all --skip_viz --skip_gantt     # 仅计算
 **统一实验设计（单次产出 4 变体）**：
 - 每个 seed 只跑一次，**同时产出** `rmoea_d` / `qpas_only` / `rvns_only` / `moea_d` 四种变体
 - 一次运行即同时满足对比实验与消融实验需求，**无需分别跑两遍**（旧版双实验流程已废弃）
-- `results/experiment/` 为唯一主数据源，`results/benchmark/` 与 `results/ablation/`
+- `results/experiment/` 为**旧流水线内部**的主数据源，`results/benchmark/` 与 `results/ablation/`
   由它派生（兼容旧版路径），per-run JSON 同时供甘特图直接渲染，零重复计算
+- ⚠ 论文与消融阶梯的数据源是 **`logs/`**（实例边界口径），不是 `results/`（盒口径、修复前旧代码）
+  —— 两者**不可混用**，见上文「HV 归一化口径」第 4 条
 - 数据复用：benchmark 与消融共用同一批 run，节省约 **53% 算力**
 
 **TFN 对比三线表**：`python main.py visualize` 会从 `results/experiment/` 读取
@@ -289,24 +297,60 @@ python scripts\optimization_plots.py            # -> charts\optimization\*.png
 > 默认 `"mix3"` 是**论文口径**（与 `init_mix3` 逐位相同，有等价性锁）。
 > 可选值见 `core/operators.py: INIT_VARIANTS`：`random` / `mix3_spt` / `mix3_mwr` /
 > `mix3_gw_spt` / `half_random` / `no_random`。
-> **注意**：`mix3_mwr`（OS-MWR 派工式初始化）在 Mk10 上 +8.64%\*\*\*，
-> 但在 Mk07/Mk09 留出集上只有 +0.3%（n.s.）—— **不是普适改进，默认值不要改**。
+> **注意**：`mix3_mwr`（OS-MWR 派工式初始化，即消融臂 `I_mwr`）在 Mk10 上
+> **实例边界口径 `+0.69%`\*\*\***（29/30, p=3.7e−09, dz=+1.71），
+> 但留出集 Mk07/Mk09 上**与 0 不可区分**（−0.01% / +0.01%，p=1.000 / 0.685）
+> —— **不是普适改进，默认值不要改**。
+> （曾写 `+8.64%` / `+0.3%`：前者是**盒口径**、放大 12.5×；后者是盒口径把
+> "Mk07/Mk09 与 0 不可区分"误读成"方向可复现、只是幅度塌了"这个**不存在的中间态**。
+> 详见 `docs/optimization-report.md` §2.3–2.4。）
 
 ---
 
 ## HV 归一化口径（重要）
 
-跨算法比较 HV **必须**用同一套归一化边界，否则指标不可比。本项目统一采用
-**参考集归一化（reference-set normalization）**：
+本仓库里同时存在**两套** HV 归一化口径，混用是历史上绝大多数数字漂移的根源。
+先记住裁决：**报效应一律用「实例边界口径」**。
 
-1. 求解器内联用 `instance_hv_bounds(instance)` 由实例数据确定性推出边界
-   （同一实例所有 run / 所有算法共用，结果 JSON 的 `hv_bounds` 字段）；
-2. 统一实验跑完后，`experiment._retune_hv_reference_set()` 再用
-   **该实例所有变体、所有 run 的前沿并集** 重算一次 `final_hv`，
-   并写入 `hv_norm_bounds` / `hv_ref_point` / `hv_definition` 字段。
+**① 实例边界口径 —— 论文口径，唯一可引用。**
+`instance_hv_bounds(instance)`（`src/rmoea_d/utils/metrics.py`）由**实例数据**
+确定性推出边界（临界路径下界 … 全部工序最长时间之和），**与参与比较的臂集无关**。
+`scripts/ablation_ladder.py` / `anytime_run.py` / `init_probe.py` / `t_leverage_sweep.py`
+等**实验台落盘的 `final_hv` / `hist_hv` 用的就是它**（求解时取一次
+`instance_hv_bounds(instance)` 归一化，字段本身不额外落盘）。
+因此它们**天然可跨批次、跨臂集直接比较**，论文全部数字取此口径。
+
+**② 盒口径（参考集归一化）—— 只许出现在分析脚本里。**
+`estimate_hv_bounds(fronts)` 把盒边界取成**参与比较的前沿并集**的极值，
+归一化后前沿贴满 `[0,1]²`，HV 整体偏大，**且随"放进盒里的臂"漂移**（缺陷 14/18）。
+`results/`（`main.py run` / `run_all.py` 的旧路径）走的是
+`experiment._retune_hv_reference_set()`，落盘 `hv_norm_bounds` / `hv_ref_point` /
+`hv_definition` 三个字段——**这是盒口径**。
+
+**四条规矩，缺一不可**：
+
+1. 报「某组件有没有用」与「效应有多大」——**只用实例边界口径**，且**直接读落盘的
+   `final_hv`，不重算**。
+2. **同一盒内可比；跨盒、跨口径一律不可引用 —— 包括 `ΔHV` / `p` / `wins`**
+   （缺陷 25。参考集口径不仅改幅度，还会**改变现象的形状**）。
+3. 引用历史盒口径数字，必须**同时给出臂集与放大倍数**
+   （复核工具：`scripts/t_caliber_check.py`、`scripts/caliber_audit.py`）。
+4. ⚠ **`results/` 是修复前旧代码的产物**（见 `docs/ablation-qpas-rvns-diagnosis.md`
+   的「注意」段）：它的 `final_hv` 既不是实例边界口径、也不记 `hv_bounds`
+   → **不要与 `logs/` 的 `final_hv` 混用**。
 
 不要把 `final_hv` 与「用每条前沿自己的 min/max 归一化」得到的数值混用——
 后者会把任意前沿拉伸到单位盒，指标对整体优劣不敏感，**无法区分算法优劣**。
+
+**同一份数据、两种口径（Mk10 固定-T 扫参，`logs/_mk10_lab.json`）**：
+
+| 口径 | 最优档 | 全 6 档极差 | Friedman |
+|---|---|---|---|
+| **实例边界**（论文口径） | **T15** | **+0.128%**（配对 p=0.073） | p=0.54 n.s. |
+| 盒口径（臂集 = 6 档 × 30 seeds） | T50 | +6.12%（放大 **47.8×**） | p=4.7e-05 \*\*\* |
+
+**两口径的"最优档"被颠倒、行动建议相反** —— 这正是"引用任何一个数（含 `p`）前
+必须先声明口径"的理由。
 
 ## Q-PAS 奖励模式（`ql_reward_mode`）
 
@@ -318,9 +362,15 @@ python scripts\optimization_plots.py            # -> charts\optimization\*.png
 | `"hv_cont"` | 连续 HV 增量 | 二值奖励的连续化版本 |
 
 四种模式两两差异均不显著（Mk01 上 Friedman p=0.86；Mk10 上亦然）。
-**根因不是奖励设计，而是 Q-PAS 本身的收益上限**：Mk10 上 T 确实是强杠杆
-（固定 T 扫参 Friedman p=4.7e-05\*\*\*，最优 T=50 落在论文候选集 {5,10,15,20} 之外），
-但在四种语境下 Q-PAS 相对配对对照均未达显著（+1.56% / +0.56% / −1.49%，p≥0.13）。
+**根因不是奖励设计，而是 Q-PAS 的动作空间里没有天花板可追**：
+Mk10 固定-T 扫参在**实例边界口径**下 Friedman **p=0.54 n.s.**，
+且空间内最优 **T15** 同时就是全部 6 档最优（**动作空间的天花板为 0**）；
+T 的杠杆几乎全部来自"别用 T=5"（配对 T05→T15 +0.128%，p=0.073）。
+（曾写"固定 T 扫参 Friedman p=4.7e-05\*\*\*、最优 T=50 落在候选集之外"——
+那是**盒口径**，并且把最优档从 T15 颠倒成了 T50，行动建议随之相反；
+见下节「HV 归一化口径」的两口径对照表。）
+四种语境下 Q-PAS 相对配对对照均未达显著（**盒口径** +1.56% / +0.56% / −1.49%，p≥0.13；
+§9 阶梯的**实例边界口径**为 +0.23% n.s.）——**结论方向不随口径变，但数字与 p 都变**。
 详见 `docs/ablation-qpas-rvns-diagnosis.md` 与 `docs/paper-vs-reproduction.md`。
 
 ## Q-PAS 的 CV 归一化（`ql_cv_normalize`）
@@ -336,13 +386,17 @@ CV 被大量纲目标独占——实测 Mk10 上一次 200 代运行里
 | `False`（**默认**） | 严格照论文，用原始目标值计算（复现优先） |
 | `True` | 先用 `hv_bounds`（缺省用本代前沿范围）归一到同一尺度 |
 
-**实测结论：打开它没有救回 Q-PAS**。Mk10 × 30 seeds 对照：
-`0.82740 → 0.82458`（dv）、`0.83590 → 0.83091`（hv+wide），HV 略降且仍 n.s.
+**实测结论：打开它没有救回 Q-PAS**。Mk10 × 30 seeds 对照
+（**盒口径绝对值，勿跨盒引用**）：`0.82740 → 0.82458`（dv）、
+`0.83590 → 0.83091`（hv+wide），HV 略降且仍 n.s.。
+同一个臂 `QPAS2_hv_wide` 在项目里留下过 `0.82014` / `0.82795` / `0.83590`
+三个值，差异**全部来自盒漂移**，不是算法变化。
 它是定义层面的瑕疵（值得写进复现说明），但不是 Q-PAS 失效的原因。
 
-**真正的原因**：排除 `T=5` 后，T 的收益曲线几乎是平的（T10/15/20/50/100
-极差仅 0.0168，而 run 间 σ 为 0.034~0.055）。T 的杠杆几乎全部来自
-"别用 T=5"，而非"选到最优 T"。完整审计见 `docs/qpas-implementation-audit.md`。
+**真正的原因**：排除 `T=5` 后，T 的收益曲线几乎是平的——**实例边界口径**下
+T10/15/20/50/100 极差 `0.000839`（0.0905%），而 run 间 sd 为 `0.0030~0.0045`
+（极差 / sd = **0.19**）。T 的杠杆几乎全部来自"别用 T=5"，而非"选到最优 T"。
+完整审计见 `docs/qpas-implementation-audit.md`。
 
 ## RVNS 算子选择模式（`rvns_mode`）
 
@@ -355,12 +409,17 @@ CV 被大量纲目标独占——实测 Mk10 上一次 200 代运行里
 论文阶梯里随机 VNS 早在 D3 就位，所以它测的 RVNS 增益只是后者。
 `ls_trials`（每代邻域尝试次数）是比算子选择更强的杠杆：
 
-| 对照（Mk10, n=30） | ΔHV 相对 | p |
+| 对照（Mk10, n=30，**盒口径**：参考集归一化 / 28 臂 / 840 runs） | ΔHV 相对 | p |
 |---|---|---|
 | 加上局部搜索本身（论文 `ls_trials=1`） | +5.68% | 1.8e-05 \*\*\* |
 | RL 引导选算子 vs 随机选算子（`ls_trials=1`） | −0.25% | 0.53 n.s. |
 | RL 引导选算子 vs 随机选算子（`ls_trials=3`） | **+1.86%** | **0.045 \*** |
 | 邻域尝试 1 → 3 次 | **+4.68%** | 3.5e-05 \*\*\* |
+
+> ⚠ 上表是**盒口径**（实例边界口径下 §9 阶梯给 **RVNS −0.02%，n.s.**，甚至倒退）。
+> 且 `+1.86%\*` **过不了等算力对照**：`G440` 家族（算力仅 1.06×）下退化为
+> **+0.56%, 15/30, p=0.73 n.s.**（见 `docs/paper-vs-reproduction.md` 的等算力段）。
+> 即 **「RL 引导选算子」在本项目里始终没有可复现的净贡献**。
 详见 `docs/ablation-qpas-rvns-diagnosis.md`。
 
 ---
