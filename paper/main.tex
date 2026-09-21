@@ -203,7 +203,10 @@ Pareto 前沿上有无穷多个取舍点，想一次全找到很难。\textbf{�
 预先给定一组\textbf{权重向量}（例如"七成看工期、三成看负载"），每个权重对应一个
 加权单目标子问题；子问题各自求解、并与邻居交换信息，合起来铺满整条前沿。
 把多个目标合成一个标量的公式有多种，本文复现对象采用的是 Tchebycheff 形式。
-MOEA/D\cite{zhang2007moead} 是这一类的代表。
+MOEA/D\cite{zhang2007moead} 是这一类的代表。另一条主流路线不做分解，
+而是按"谁支配谁"给解排序、并保留整层互不支配的解，代表是
+NSGA-II\cite{deb2002moead}；本文不比较这两条路线，提到它只是为说明
+MOEA/D 在算法谱系中的位置。
 
 权重向量的集中程度由一个参数控制，记为 $T$：$T$ 小则各子问题关注点差异大、
 前沿铺得开；$T$ 大则铺得均匀但彼此接近。本文复现的 RMOEA/D\cite{li2022rmoead}
@@ -257,14 +260,17 @@ MOEA/D\cite{zhang2007moead} 是这一类的代表。
     臂（arm） & 阶梯上的一个算法配置；六个臂 $D_1$--$D_5$ 与 \textsf{RMOEAD} \\
     \textsf{RMOEAD} & 完整算法（RL 选算子）；与 $D_5$ 仅差"谁选算子" \\
     Q-PAS / RVNS & 论文的两个 RL 组件：选参数 $T$ / 选邻域搜索算子 \\
-    MIX3 / MWR & 两种初始化（起点构造），后者是本文要检验的候选 \\
+    MIX3 / MWR & 两种初始化（搜索起点）：MIX3 是论文自带的（三等分：随机 / 最短时间 /
+      负载最轻，工序顺序均随机）；MWR 是本文要检验的候选，额外固定了工序顺序 \\
     目标 A / 目标 B & 分别以随机初始化 / 论文自身初始化（MIX3）为对照的净增量 \\
     $\lam$（零代探针） & 只构造一次初始种群（不做任何搜索）得到的初始前沿 HV 杠杆 \\
     实例级 / run 级 & 先在实例内对 30 个种子取均值（$n$ = 实例数）/ 逐种子配对（$n=30\times$实例数） \\
     $d_z$ / $p$ & 配对效应量 / 配对 Wilcoxon 检验的显著性水平 \\
     等算力比较 & 比较两个配置时给它们相同的算力预算，否则"更好"可能只是"算得更多" \\
     算力响应面 & 把算力当自变量、观察效应如何随之变化的一组实验 \\
-    置换零假设 & 打乱实例与目标量的对应、重复多次，用于家族校正与事后检验 \\
+    墙钟预算 & 按真实流逝的时间（而非代数）给算力分档；同代数不等于同耗时 \\
+    置换零假设 & 打乱实例与目标量的对应、重复多次。用于家族校正：同时考察多个候选
+      并从中挑最大时，"挑最大"本身就会带来偏差，置换检验正是模拟这个动作 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -315,16 +321,34 @@ $D_5$ 打开精英档案；\textsf{RMOEAD} 把随机 VNS 换成 RL 选算子。
 本节是全篇的方法学核心，用一句话概括它的主张：
 \emph{同一份实验结果，只要换一种"把多目标压成单一指标"的做法，
 就能读出不同的效应量、不同的显著性、甚至不同形状的结论}。
+图~\ref{fig:caliber} 用同一批前沿点配两种边界把这件事讲清楚：
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.94\linewidth]{fig_caliber.pdf}
+  \caption{\textbf{评价口径示意图——点为手工构造，\emph{非实验结果}，不参与本文任何结论。}
+  两栏用的是\textbf{同一批前沿点}（红圆与蓝方分别代表两个臂的前沿），
+  唯一的差别是"灰框怎么定"。(a) \textbf{实例边界口径}：框由实例数据推出
+  （下界取临界路径下界、上界取全部工序最长时间之和），换一批算法来比，框也不会变，
+  因此读数可以跨实验引用。(b) \textbf{盒口径}：框取"参与比较的臂的前沿极值"，
+  于是框恰好贴着数据——再放进一个更差的臂（灰圈），框的上界就被撑高（蓝虚线），
+  同一批点的归一化坐标随之改变。两栏横轴均为完工时间 $f_1$、
+  纵轴均为机器总负载 $f_2$，都是未归一化的原始单位，越靠左下越好。}
+  \label{fig:caliber}
+\end{figure}
+
 下面先说明两种边界取法的区别（\S\ref{sec:boxdef}），再量化后果（\S\ref{sec:boxeffect}），
 最后给出本文遵守的报数规则。
 
 \subsection{盒口径的两个缺陷}\label{sec:boxdef}
 \textbf{(a) 跨实例污染。} 若把多个实例的前沿并进同一个盒，这个盒就不得不同时容纳
-规模相差悬殊的实例：在开发集内，仅\textbf{负载下界}一项，最大与最小就相差
+规模相差悬殊的实例。先看一个不需要任何优化知识的量：\textbf{负载下界}——
+把该实例全部工序都取最短加工时间再加起来，就是机器总负载 $W$ 再优化也到不了的
+理论最小值。在开发集内，仅这一项，最大与最小就相差
 $\BndWlSpan\times$（Mk08 的 $\BndMaxLoWl$ 对 Mk02 的 $\BndMinLoWl$），
-最大完工时间的下界也相差 $\BndMsSpan\times$。于是所有实例的读数都被"拉"进
-相近区间，读出"所有变体都近乎完美"的假象。凡按 $(\text{臂},\text{seed})$
-在多个实例上摊平再取极值的写法都会踩这一点。
+最大完工时间的下界也相差 $\BndMsSpan\times$。规模差这么远的前沿被塞进同一个框后，
+两头的读数都被"拉"进相近区间，于是读出"所有变体都近乎完美"的假象。
+凡按 $(\text{臂},\text{seed})$ 在多个实例上摊平再取极值的写法都会踩这一点。
 
 \textbf{(b) 臂集污染。} 盒只应包含\textbf{参与比较的臂}。若把与本次比较无关的臂
 一并放进盒（例如把另做的一批 $T$ 扫描臂混进消融实验的日志），上界被无关数据撑高，
@@ -335,22 +359,27 @@ $\BndWlSpan\times$（Mk08 的 $\BndMaxLoWl$ 对 Mk02 的 $\BndMinLoWl$），
 表~\ref{tab:ladder} 右三列给出同一批数据（8 臂 $\times$ 10 实例 $\times$ 30 seeds）
 在两种口径下的读数。三点值得注意：
 
-\begin{enumerate}\itemsep2pt
-  \item \textbf{放大倍数不是常数}：按臂对汇总（比值之比，\S\ref{sec:stat}）从
-        $\CalibAmpLo\times$ 到 $\CalibAmpHi\times$ 不等，
-        逐格子最高达 $\CalibAmpMax\times$（Mk10 的 $D_4|D_3$：实例边界 $\CalMkTenQpasInst\%$
+\begin{enumerate}\itemsep4pt
+  \item \textbf{放大倍数不是常数}。如果两种口径只差一个固定倍数，那盒口径的数字
+        除以该倍数就能折回实例边界口径，事情还不算麻烦。事实并非如此：按臂对汇总
+        （含义是"先各自求均值、再作比"，见 \S\ref{sec:stat}），放大倍数从
+        $\CalibAmpLo\times$ 到 $\CalibAmpHi\times$ 不等，逐格子最高达
+        $\CalibAmpMax\times$（Mk10 的 $D_4|D_3$：实例边界 $\CalMkTenQpasInst\%$
         $\to$ 盒口径 $\CalMkTenQpasBox\%$）。因此"盒口径数字除以固定倍数即可折回"是错的。
-        图~\ref{fig:ladder} 把两种口径并排画出，$D_2|D_1$ 的相对增幅被放大
-        $\CalibAmpMix\times$，而几乎为零的 $D_4|D_3$ 被放大 $\CalibAmpQpas\times$
-        ——\textbf{越接近零的效应，相对放大越厉害}：$\CalibCells$ 个（实例，臂对）
-        格子里，$|\Delta \hv|\le \CalibSmallThr\%$（"接近零"的显式阈值）的 $\CalibSmallN$ 个
+
+        \emph{那么被放得最狠的是哪些格子？}图~\ref{fig:ladder} 把两种口径并排画出：
+        $D_2|D_1$ 的相对增幅被放大 $\CalibAmpMix\times$，而几乎为零的 $D_4|D_3$
+        被放大 $\CalibAmpQpas\times$——\textbf{越接近零的效应，相对放大越厉害}。
+        在全部 $\CalibCells$ 个（实例，臂对）格子里，
+        $|\Delta \hv|\le \CalibSmallThr\%$（"接近零"的显式阈值）的 $\CalibSmallN$ 个
         格子放大中位数为 $\CalibSmallMed\times$，其余 $\CalibRestN$ 个只有
-        $\CalibRestMed\times$。
-        \textbf{秩相关的口径必须写明}：对 $\log_{10}|\text{放大}|$ 取秩得
-        $\mathrm{Spearman}=\CalibRhoLog$（$p=\CalibRhoLogP$）；若直接对原始放大倍数
-        取秩则只有 $\CalibRhoRaw$（$p=\CalibRhoRawP$，未过线）。
-        两者方向一致、强弱不同——不写出取对数这一步，读者无法复核这个数。
-        这正是本文主张的"\textbf{任何数字离开其口径不可引用}"的一个具体例子。
+        $\CalibRestMed\times$。\textbf{这里的秩相关必须写明"取了对数"这一步}：
+        秩相关的意思是"不比数值大小、只比名次"。先把放大倍数取 $\log_{10}$
+        再排名次，得 $\mathrm{Spearman}=\CalibRhoLog$
+        （$p=\CalibRhoLogP$）；若直接对原始放大倍数排名次则只有 $\CalibRhoRaw$
+        （$p=\CalibRhoRawP$，未过线）。两者方向一致、强弱不同——
+        不写出这一步，读者无法复核这个数。这正是"\textbf{任何数字离开其口径
+        不可引用}"的一个具体例子。
   \item \textbf{$p$ 值与胜出场数也会变}。这一点比幅度更容易被忽略：口径改变
         不只是"数字大小"，而是\textbf{显著性判定本身}。
   \item \textbf{现象的形状会变}。本文 \S\ref{sec:twoTargets} 会遇到一个
@@ -375,6 +404,11 @@ $\BndWlSpan\times$（Mk08 的 $\BndMaxLoWl$ 对 Mk02 的 $\BndMinLoWl$），
 Mk01--Mk10\cite{brandimarte1993}——复现对象所用的原始基准，规模由小到大——
 用于复现实验与\emph{标定}门限；\textbf{留出集}为 Hurink $e$-data 的全部 66 个实例
 \cite{hurink1994}，只在门限冻结之后启用一次，用来检验门限能否推广到新分布。
+这里有个容易被忽略的前提：表~\ref{tab:instances} 两段的"弹性比"列
+（该列含义是"每道工序平均有多少台机器可选"）显示，这一族的\textbf{柔性远低于开发集}
+——每道工序平均只有一台多一点机器可选，而 Mk01--Mk10 最高到四台。
+所以留出验证不只是换一批实例，更是在\textbf{换一个问题分布}；
+\S\ref{sec:hurink} 的负结果与这个差异直接相关。
 留出集的选择\textbf{完全预注册}：所谓预注册，指\emph{先}写明"将使用哪批数据、
 按什么规则判定"，\emph{再}去看结果，以排除事后挑选有利于自己的实例；本文的做法是
 取该数据集的\emph{全部}实例，不做任何按结果的取舍。实例文件取自公开基准库并以
@@ -385,24 +419,37 @@ SHA-256 记录来源（\texttt{data/hurink/PROVENANCE.json}）。
 \subsection{参数与算力}
 算法本质上是随机搜索：一个\textbf{随机种子}（seed）决定它内部的所有随机选择，
 换一个种子就是一次独立重复。单次重复的结果可能碰巧偏好或偏坏，因此每个配置
-都要跑多个种子。本文取种群规模 $N_p=\SetNp$、代数 $G=\SetG$、每个配置 \SetSeeds 个随机
-种子（42--71），$\mathrm{ref}=(\SetRefLo,\SetRefLo)$。所有组间比较都做\textbf{同 seed 配对}，
+都要跑多个种子。本文取种群规模 $N_p=\SetNp$（"种群"就是算法同时维护的那一组
+候选解，上文的每个权重向量各占一个）、代数 $G=\SetG$（迭代多少轮）、
+每个配置 \SetSeeds 个随机种子（42--71），$\mathrm{ref}=(\SetRefLo,\SetRefLo)$。
+所有组间比较都做\textbf{同 seed 配对}，
 以消掉"模糊时间随 seed 变"带来的实例内噪声。响应面实验（\S\ref{sec:surface}）
-另在 $G=\SetGMax$ 上限下按墙钟预算分档，用于观察"算力变大时效应如何变"。
+另在 $G=\SetGMax$ 上限下按\textbf{墙钟预算}分档。"墙钟"（wall-clock）指真实流逝的时间，
+它和"跑了多少代"不是一回事：同样的代数，不同配置实际花掉的时间并不相同。
+要比较"给更多算力有没有用"，按真实耗时来分档才公平，所以响应面用墙钟而不用代数，
+用于观察"算力变大时效应如何变"。
 
 \subsection{统计口径}\label{sec:stat}
-同一组比较给两套读数：\textbf{实例级}（先在实例内对 30 个 seed 取均值，$n=10$ 或
-$n=66$）与 \textbf{run 级}（逐 seed 配对，$n=\RunN$）。检验用 Wilcoxon 符号秩，
-效应量用配对 Cohen's $d_z$；相对增幅定义为
-$\overline{\Delta \hv}/\overline{\hv}_{\text{上一级}}$（先求均值再作比，
-不用 $\overline{\Delta/\hv}$——后者在效应$\approx 0$ 时会反号；\textbf{盒口径的
-放大倍数也用同一约定}：$\overline{\Delta \hv}_{\text{盒}}/\overline{\Delta \hv}_{\text{实例}}$，
-而不是逐 run 放大倍数的平均，两者相差可达数倍）。
-存在多个候选预测变量时，用\textbf{置换零假设}（固定预测变量的秩矩阵、
-只打乱实例与目标的对应）做家族错误率校正，而不是 Bonferroni：
-在 $n=10$、\CalibFamN 个候选的设定下，纯噪声的 $\max|\rho|$ 的 95\% 分位就有
-$\CalibFamNullPct$，
-Bonferroni 的 $\BonfThr$ 门槛过松。
+同一组比较给两套读数：\textbf{实例级}（先在实例内对 \SetSeeds 个 seed 取均值，
+$n=10$ 或 $n=\HKn$）与 \textbf{run 级}（逐 seed 配对，$n=\RunN$）。检验用
+Wilcoxon 符号秩（\S\ref{sec:prelim}），效应量用配对 Cohen's $d_z$；
+两者的分工是"$p$ 回答有没有、$d_z$ 回答有多大"，本文两者同时报告。
+
+\textbf{相对增幅一律"先求均值、再作比"}，即写成
+$\overline{\Delta \hv}/\overline{\hv}_{\text{上一级}}$，而不写
+$\overline{\Delta/\hv}$——后者在效应$\approx 0$ 时，分子分母会因正负相消而反号。
+\textbf{盒口径的放大倍数也守同一约定}：
+$\overline{\Delta \hv}_{\text{盒}}/\overline{\Delta \hv}_{\text{实例}}$，
+而不是逐 run 放大倍数的平均，两者相差可达数倍。
+
+存在多个候选预测变量时，一律用\textbf{置换零假设}（固定预测变量的秩矩阵、
+只打乱实例与目标的对应）做家族校正，不用 Bonferroni。理由是它回答的问题
+更对得上：本文要防的是"\emph{从 $\CalibFamN$ 个候选里挑最大}"这个动作本身
+带来的偏差，而置换零假设正是直接模拟这个动作——即使预测变量与目标毫无关联，
+纯噪声的 $\max|\rho|$ 在 $n=10$ 下也有 $95\%$ 的机会达到 $\CalibFamNullPct$。
+（Bonferroni 只把 $p$ 门槛收到 $\BonfThr$，它假定各候选相互独立；
+而本文的候选都是同一批前沿的不同摘要、彼此高度相关。两者的口径并不相同，
+本文不做换算。）
 
 \subsection{复现环境}
 代码为 Python 实现，数值依赖 NumPy/SciPy；实验按实例分批驱动并支持断点续跑。
@@ -433,9 +480,11 @@ RL 选算子 $\LadderRlRel\%$（\LadderRlWins，不显著）。
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.86\linewidth]{fig_ladder.pdf}
-  \caption{六臂阶梯的逐级 $\Delta$HV 相对增幅：实例边界口径（实心，正文引用）
-  与盒口径（斜纹，仅作对照）。盒口径把接近零的效应相对放大得最多，
-  红色标注为放大倍数。}
+  \caption{六臂阶梯的逐级 $\Delta$HV 相对增幅（纵轴，单位 \%）与两种口径的对照。
+  横轴每一格是一个"臂对"，$D_2|D_1$ 读作"$D_2$ 相对 $D_1$ 多出来的那部分"，
+  自左向右即 \S\ref{sec:prob} 中阶梯逐级打开的顺序。
+  实心柱为实例边界口径（正文引用），斜纹柱为盒口径（仅作对照），
+  柱顶红色数字是两者的倍数。可以看出盒口径把接近零的效应相对放大得最多。}
   \label{fig:ladder}
 \end{figure}
 
@@ -461,11 +510,27 @@ $\SurfInitEndA/\SurfInitEndB/\SurfInitEndC$（衰减 $\SurfDecayLo$--$\SurfDecay
 \end{figure}
 
 \subsection{同一批数据上的两个目标量}\label{sec:twoTargets}
-MWR 是本文提出的一个初始化变体：决定工序先后时按"剩余工时最多者优先"的规则排列
-（一种常见的派工启发式），只在"选哪台机器"这一维度上保留原算法的随机性。要问
-"该不该用它"，必须把对照设成\textbf{论文自己的 MIX3 初始化}（目标 B）；把它对照
-随机初始化（目标 A）回答的则是另一个问题。表~\ref{tab:targets} 与
-图~\ref{fig:targets} 同时给出两者。
+先说清两种被比较的起点。任何进化算法都要先造一批初始排产方案（\textbf{初始化}），
+再从这里开始搜索；起点好不好对结果影响很大，这正是 \S\ref{sec:ladder} 里
+初始化成为最大组件的原因。本文涉及两种：
+
+\begin{itemize}\itemsep2pt
+  \item \textbf{MIX3}（复现对象自带的初始化，也是"目标 B"的对照）：把初始种群
+        三等分，各用三条规则之一各造三分之一——完全随机；每道工序挑
+        \emph{最可能加工时间最短}的机器；每道工序挑\emph{当前负载最轻}的机器。
+        注意三条规则都只在"选哪台机器"上做文章，\textbf{工序的先后顺序仍然
+        是随机打乱的}。
+  \item \textbf{MWR}（本文的候选变体）：把工序的先后顺序也管起来——按
+        \emph{剩余工时最多者优先}排列（一种常见的派工启发式，先把长活排上队），
+        机器维度则保留随机性。
+\end{itemize}
+
+于是"该不该用 MWR"有两种问法，对应两个不同的目标量：拿\textbf{论文自己的
+MIX3 初始化}做对照（目标 B），问的是\textbf{净增量}——"在论文已经达到的水平上
+还能多赚多少"；拿\textbf{随机初始化}做对照（目标 A），问的是"有个好起点本身值多少"。
+两个量在同一批数据上都算得出来，但\textbf{用目标 A 的答案去论证目标 B 是无效的}：
+前者可以很大（好起点普遍有价值），后者却可能一点不剩。
+表~\ref{tab:targets} 与图~\ref{fig:targets} 同时给出两者。
 
 \begin{itemize}\itemsep2pt
   \item \textbf{目标 A}（$\imwr$ vs.\ $\irand$）：\TgtAPosN/\TgtAN\ 实例为正、\textbf{\TgtASigN\ 个显著}
@@ -508,7 +573,9 @@ $[\HKdevPosLamLo\%,\HKdevPosLamHi\%]$ 内，其余七个都低于门限 $\HKthr\
 \textbf{完全分离}：\HKdevPosN/\HKdevPosN 命中、0 误放、0 漏放。
 该门限在开发集上标定后\textbf{冻结}，不再按留出集调整。
 
-这里必须把两个相关系数\textbf{分开}报，否则会重犯本文所批评的那类错位：
+这里必须把两个相关系数\textbf{分开}报，否则会重犯本文所批评的那类错位。
+（下文 $\rho$ 一律指 \textbf{Spearman 秩相关系数}：把 $\lam$ 与净增量各自排名次，
+看两个名次同向的程度——$+1$ 表示完全同向，$0$ 表示毫无关系。）
 $\lam$ 自身 $\rho=\ProbeRho$（名义 $p=\ProbeRhoP$）；若改取 9 个事前候选的家族最大，
 最高者并不是 $\lam$ 而是"初始种群\textbf{平均} makespan 杠杆"，$\rho=\FamRho$、
 置换校正 $p=\PermP$。注意家族零假设下 $\max|\rho|$ 的 $95\%$ 分位为 $\NullPct$，
@@ -538,11 +605,13 @@ $\lam$ 自身 $\rho=\ProbeRho$（名义 $p=\ProbeRhoP$）；若改取 9 个事�
 
 \HKverdict
 
-\noindent 表~\ref{tab:gate} 给出两个集合上的混淆矩阵，表~\ref{tab:hurink} 逐实例列出
+\noindent 表~\ref{tab:gate} 把两个集合的判定结果并排列出——"真赚/真不赚"与
+"放行/拦下"的四种组合各有多少个实例（即\textbf{混淆矩阵}），
+表~\ref{tab:hurink} 则逐实例列出
 探针 $\lam$ 与目标 B 的净增量。留出集的 $\lam$ 取值范围是
 $[\HKlamLo\%,\HKlamHi\%]$，而开发集正例的 $\lam$ 落在
-$[\HKdevPosLamLo\%,\HKdevPosLamHi\%]$——两个集合的 $\lam$ 分布并不同构，
-这正是"门限在开发集上冻结、再到留出集检验"要暴露的东西：
+$[\HKdevPosLamLo\%,\HKdevPosLamHi\%]$——两个集合的 $\lam$ 分布并不相同，
+位置与跨度都对不上，这正是"门限在开发集上冻结、再到留出集检验"要暴露的东西：
 门控可靠与否，取决于留出集的 $\lam$ 有多少落在门限的决策边界附近。
 
 \noindent \textbf{这个判对率必须与平凡基线并列看，否则容易读反。}留出集上真正有增益的
@@ -556,7 +625,7 @@ $\HKpassN$ 个实例，其中只有 $\HKtp$ 个真赚（精确率 $\HKpassPrec$�
 \S\ref{sec:twoTargets} 的目标 B 回答；它说明的是“\textbf{用一个零代探针事先判断
 该不该用它}”这个方案在跨分布时不可靠：门限是在 $n=10$ 的开发集上挑出来的（在那里
 它恰好拿到 $\HKaccDev$ 的判对率，把 $10$ 个实例全部判对），而 Hurink 上 $\lam$ 的
-分布与开发集并不同构，$[\HKlamLo\%,\HKlamHi\%]$ 的跨度远大于开发集正例所在的
+分布与开发集并不相同，$[\HKlamLo\%,\HKlamHi\%]$ 的跨度远大于开发集正例所在的
 $[\HKdevPosLamLo\%,\HKdevPosLamHi\%]$。其二，判对率里确实有一部分被决策边界吃掉了——
 $\HKnearHalf$ 个实例的 $\lam$ 落在门限 $\pm\HKnearBand$ 个百分点内，而 \S\ref{sec:seedvar}
 已证明这一带即使 30 个 seed 也判不稳——但\textbf{精确率与召回不受这个解释的庇护}：
@@ -569,8 +638,12 @@ $\HKnearHalf$ 个实例的 $\lam$ 落在门限 $\pm\HKnearBand$ 个百分点内�
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.86\linewidth]{fig_gate.pdf}
-  \caption{零代门控在开发集（圆）与留出集（三角）上的分离情况。
-  门限 $\lam=\HKthr\%$ 在开发集上标定后冻结。}
+  \caption{零代门控的分离情况：横轴为探针读数 $\lam$（初始前沿 HV 杠杆，\%），
+  纵轴为"该实例的净增量是否显著为正"（是 = 上排，否 = 下排），每个标记是一个实例。
+  虚线即门限 $\lam=\HKthr\%$，它在开发集（圆点）上标定后立即冻结，
+  再原样用到留出集（三角）上。门控理想的效果是"门限右侧全在上排、左侧全在下排"，
+  实际并非如此：留出集在门限右侧仍有许多三角落在下排——
+  被放行的实例里有相当一部分其实并不赚。}
   \label{fig:gate}
 \end{figure}
 
@@ -585,7 +658,7 @@ $\HKdevGap$ 个百分点（正例最低 $\HKdevPosLamLo\%$，非正例最高 $\H
 
 做法是：对每个实例先算出 30 个 seed 的逐 seed 值，再对
 $n\in\{1,2,3,4\}$ 枚举全部 $\binom{30}{n}$ 个子集、对更大的 $n$ 随机抽样 \PermSubsets 个子集，
-用与正式探针\textbf{完全相同的估计量}重算 $\lam$，最后看判定是否与该实例
+用与正式探针\textbf{完全相同的公式}重算 $\lam$，最后看判定是否与该实例
 30-seed 判定一致。表~\ref{tab:probe_seeds} 给出结果。
 
 结论是分层的：\textbf{离门限远的实例在 $n=1$ 就已经稳定}，
@@ -604,8 +677,8 @@ $\PSagreeOne$，看起来很好，但最差实例只有 $\PSagreeMinOne$ ——
 
 \subsection{为什么两个 RL 组件没有空间}
 三条证据互相独立且一致：(1) 阶梯上 Q-PAS 与 RL 选算子均不显著；
-(2) 对 $T$ 的动作空间做穷举式扫描（把所有候选的 $T$ 值逐个试完，
-含空间外的更大候选值）：空间内最优与最差的差只有 $\TscanGapPct\%$
+(2) 把 $T$ 可选值的集合（强化学习里叫\textbf{动作空间}，即"能做哪些选择"）
+穷举式扫描一遍——把所有候选的 $T$ 值逐个试完，含空间外的更大候选值：空间内最优与最差的差只有 $\TscanGapPct\%$
 （配对检验 $p=\TscanGapP$、效应量 $d=\TscanDz$，胜出 $\TscanWins$），
 \TscanNote
 说明\textbf{动作空间本身的天花板就很低}；(3) 算力响应面显示 $G=\SetG$ 附近已接近饱和，

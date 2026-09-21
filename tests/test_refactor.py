@@ -3427,5 +3427,79 @@ class TestAuditDocDeclaresCaliber(unittest.TestCase):
                       "文档里没有现算值 %.6f（T15 实例边界口径均值）" % mean["T15"])
 
 
+class TestSchematicFiguresAreWired(unittest.TestCase):
+    """§2/§4 两张示意图的接线与声明（示意点，不读 logs/）。
+
+    这两张图与其它图不同：它们的点是**为讲清概念手工构造的、不读 logs/**。
+    由此带来两个只有它们才有的失效模式：
+
+      ① 生成函数写了、却没在 main() 里调用（缺陷 18 "helper 写了、调用方没接"
+         的同类）——图不会被重新生成，而 figures/ 里上一轮的旧 PDF 还在，
+         编译照样成功，错误因此可以完全无声地留下来；
+      ② caption 忘了声明"示意、非实验结果"——读者会把构造的点当成实验读数。
+    """
+
+    def setUp(self):
+        root = os.path.join(os.path.dirname(__file__), "..")
+        self.export = os.path.join(root, "scripts", "paper_export.py")
+        self.main_tex = os.path.join(root, "paper", "main.tex")
+
+    def test_every_fig_function_is_called_in_main(self):
+        with io.open(self.export, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        defined = {n.name for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name.startswith("fig_")}
+        for name in ("fig_concept", "fig_caliber"):
+            self.assertIn(name, defined, "paper_export.py 里没有 %s()" % name)
+        main_fn = next((n for n in ast.walk(tree)
+                        if isinstance(n, ast.FunctionDef) and n.name == "main"), None)
+        self.assertIsNotNone(main_fn, "paper_export.py 里找不到 main()")
+        called = {n.func.id for n in ast.walk(main_fn)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        missing = sorted(defined - called)
+        self.assertEqual([], missing,
+                         "这些 fig_* 没在 main() 里调用：%s —— 图不会被重新生成，"
+                         "而 figures/ 里的旧 PDF 还在，编译不会报错" % missing)
+
+    def test_schematic_captions_declare_not_experimental(self):
+        with io.open(self.main_tex, encoding="utf-8") as fh:
+            src = fh.read()
+        blocks = re.findall(r"\\begin\{figure\}.*?\\end\{figure\}", src, re.S)
+        for label in ("fig:concept", "fig:caliber"):
+            hit = [b for b in blocks if ("\\label{%s}" % label) in b]
+            self.assertEqual(1, len(hit),
+                             "main.tex 里应恰好有一个 %s 浮体，实得 %d 个"
+                             % (label, len(hit)))
+            self.assertIn("非实验结果", hit[0],
+                          "%s 的 caption 没声明『示意、非实验结果』——"
+                          "读者会把手工构造的点当成实验读数" % label)
+
+    def test_caliber_figure_is_referenced_in_body(self):
+        """图生成了、也接进流程了，还得真的被正文引用，否则它是一张死图。"""
+        with io.open(self.main_tex, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertGreaterEqual(src.count("\\ref{fig:caliber}"), 1,
+                                "fig_caliber 没被正文 \\ref 引用")
+
+
+class TestFigureOutputIsReproducible(unittest.TestCase):
+    """图产出的可重复性守卫。
+
+    matplotlib 默认会在 PDF 里写入当前时间，于是**重跑一次导出就把全部图标记成
+    "已修改"**。二进制没法逐行 diff，没人会去逐张核对——真实的图变化会淹没在
+    时间戳噪声里，悄悄漏过去。锁住 `save_fig` 去掉创建时间。
+    （实测：去掉后连续两次导出的 PDF 逐字节相同。）
+    """
+
+    def test_save_fig_strips_pdf_creation_date(self):
+        p = os.path.join(os.path.dirname(__file__), "..", "scripts", "paper_export.py")
+        with io.open(p, encoding="utf-8") as fh:
+            src = fh.read()
+        m = re.search(r"\ndef save_fig\b.*?(?=\ndef |\nclass )", src, re.S)
+        self.assertIsNotNone(m, "paper_export.py 里找不到 save_fig()")
+        self.assertIn("CreationDate", m.group(0),
+                      "save_fig 没有去掉 PDF 创建时间——重跑导出会伪造出满屏二进制 diff")
+
+
 if __name__ == "__main__":
     unittest.main()

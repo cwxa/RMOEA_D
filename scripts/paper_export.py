@@ -168,8 +168,15 @@ def write_tex(name, body):
 
 
 def save_fig(fig, name):
+    """落盘一张图（同时出一份 .png 供人眼抽查）。
+
+    PDF 里**不写创建时间**：matplotlib 默认每次都会写入当前时间，于是重跑一次
+    导出就把全部图标记成"已修改"。真实的图变化会淹没在这堆时间戳噪声里——
+    二进制没法逐行 diff，没人会去逐张核对，改动就悄悄漏过去了。
+    """
     os.makedirs(FIG, exist_ok=True)
-    fig.savefig(os.path.join(FIG, name), bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(os.path.join(FIG, name), bbox_inches="tight", pad_inches=0.02,
+                metadata={"CreationDate": None})
     fig.savefig(os.path.join(FIG, name.replace(".pdf", ".png")), dpi=170,
                 bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
@@ -905,6 +912,76 @@ def fig_concept(data, allow_missing):
     return {"n_pf": int(len(pf)), "n_dom": int(len(dom))}
 
 
+def fig_caliber(data, allow_missing):
+    """评价口径示意图（**手工构造的示意点，不是实验结果**）。
+
+    §4 是全文的方法学核心，但此前只有文字：归一化的"盒"从哪来、为什么
+    换一批比较对象读数就变。这张图用**同一批前沿点配两个不同的框**讲清它：
+
+      (a) 实例边界口径——框由实例数据推出（临界路径下界 / 全部工序最长时间和），
+          与参与比较的臂集**无关**；
+      (b) 盒口径——框取参与比较的前沿极值，多放进一个更差的臂，框就被撑大，
+          同一批点的归一化坐标随之改变。
+
+    与 fig_concept 同：**不读 logs/**，点是为讲清概念手工构造的示意点，
+    不参与任何结论；代价是必须在 caption 显式声明"示意、非实验结果"。
+    """
+    # 两批前沿点（最小化：x 增则 y 减，左下为优），两栏共用同一批点
+    pf1 = np.array([[2.0, 9.0], [4.0, 5.0], [7.0, 2.0], [9.0, 1.0]])
+    pf2 = np.array([[2.6, 10.5], [5.2, 6.2], [8.2, 3.0], [10.5, 1.6]])
+    both = np.vstack([pf1, pf2])
+    inst_lo, inst_hi = np.array([0.0, 0.0]), np.array([16.0, 16.0])
+    box_lo, box_hi = both.min(axis=0), both.max(axis=0)
+    extra = np.array([14.5, 14.5])
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.9))
+    for ax in axes:
+        ax.set_xlim(-0.7, 17.4)
+        ax.set_ylim(-0.7, 17.4)
+        ax.set_xlabel("$f_1$ = makespan (raw units)", fontsize=6.6)
+        ax.set_ylabel("$f_2$ = machine load (raw units)", fontsize=6.6)
+        ax.tick_params(labelsize=6.0)
+        ax.grid(alpha=0.18, lw=0.35)
+
+    def _arms(ax):
+        ax.scatter(pf1[:, 0], pf1[:, 1], s=26, color=C_RED, zorder=4)
+        ax.scatter(pf2[:, 0], pf2[:, 1], s=24, color=C_BLUE, marker="s", zorder=4)
+
+    # ── (a) 实例边界口径：框由实例决定，与臂集无关 ──
+    ax = axes[0]
+    ax.add_patch(plt.Rectangle(inst_lo, *(inst_hi - inst_lo), fill=False,
+                               edgecolor=C_GREEN, lw=1.2, zorder=2))
+    _arms(ax)
+    ax.annotate("box from the instance:\ncritical-path lower bound,\n"
+                "sum of longest operation times",
+                xy=(9.5, 16.0), xytext=(7.4, 11.4), fontsize=5.8,
+                arrowprops=dict(arrowstyle="->", lw=0.7, color=C_GREEN), zorder=6)
+    ax.annotate("fronts of two arms",
+                xy=(10.5, 1.6), xytext=(10.3, 4.3), fontsize=5.8,
+                arrowprops=dict(arrowstyle="->", lw=0.7, color=C_GREY), zorder=6)
+    ax.set_title("(a) Instance-boundary box\n"
+                 "box is independent of the arm set", fontsize=7.6)
+
+    # ── (b) 盒口径：框随参与比较的臂集伸缩 ──
+    ax = axes[1]
+    ax.add_patch(plt.Rectangle(box_lo, *(box_hi - box_lo), fill=False,
+                               edgecolor=C_RED, lw=1.3, zorder=3))
+    ax.add_patch(plt.Rectangle(box_lo, *(extra - box_lo), fill=False,
+                               edgecolor=C_BLUE, lw=1.0, ls=(0, (4, 3)), zorder=3))
+    _arms(ax)
+    ax.scatter([extra[0]], [extra[1]], s=30, facecolor="none", edgecolor=C_GREY,
+               linewidth=1.1, zorder=4)
+    ax.annotate("this box covers the two arms' fronts only;\n"
+                "one extra, worse arm $\\rightarrow$ every reading moves",
+                xy=(14.2, 14.2), xytext=(0.4, 17.1), fontsize=5.8, va="top",
+                arrowprops=dict(arrowstyle="->", lw=0.7, color=C_GREY), zorder=6)
+    ax.set_title("(b) Box normalisation\n"
+                 "box $=$ extremes of the arms compared", fontsize=7.6)
+
+    save_fig(fig, "fig_caliber.pdf")
+    return {"n_pf": int(len(both)), "n_box_arms": 1}
+
+
 def tex_macro_line(name, val):
     """拼一行 `\\newcommand`；**宏名必须是纯字母**。
 
@@ -1409,6 +1486,7 @@ def main():
     print("=" * 92)
     data = {}
     fig_concept(data, args.allow_missing)   # §2 概念示意图（示意点，不读 logs/）
+    fig_caliber(data, args.allow_missing)   # §4 口径示意图（示意点，不读 logs/）
     data["instances"] = tab_instances(data, args.allow_missing)
     tab_ladder(data, args.allow_missing)
     fig_surface(data, args.allow_missing)
