@@ -14,9 +14,9 @@
     D3$|$D2 & 随机 VNS & +0.421 & 10/10 & +0.61 & $2.0\times 10^{-3}{}^{**}$ & +4.199 & 10.0$\times$ \\
     D4$|$D3 & Q-PAS & +0.030 & 5/10 & +0.05 & $0.625$ & +0.314 & 10.6$\times$ \\
     D5$|$D4 & 精英档案 & +0.082 & 10/10 & +0.65 & $2.0\times 10^{-3}{}^{**}$ & +0.400 & 4.9$\times$ \\
-    RMOEAD$|$D5 & RL 选算子 & -0.003 & 6/10 & -0.01 & $0.625$ & -0.091 & 29.7$\times$ \\
+    RMOEAD$|$D5 & RL 选算子 & −0.003 & 6/10 & −0.005 & $0.625$ & −0.091 & 29.7$\times$ \\
     \bottomrule
   \end{tabular}
   }
-  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}Mk01--Mk10，每格 $n=30$ seeds 同 seed 配对。$\Delta$HV 相对增幅为\textbf{逐实例} $\overline{\Delta\mathrm{HV}}/\overline{\mathrm{HV}}_{\text{上一级}}$ 的跨实例均值（不用 $\overline{\Delta/\mathrm{HV}}$：效应$\approx 0$ 时会反号）。$d_z$ 为 run 级池化配对效应量（$n=300$），$p$ 为实例级 Wilcoxon（$n=10$）。盒口径一列是\textbf{同一批数据}换口径重算的结果，用来量化口径的影响；正文的效应量一律取实例边界口径。\end{minipage}
+  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}Mk01--Mk10，每格 $n=\SetSeeds$ seeds 同 seed 配对。$\Delta$HV 相对增幅为\textbf{逐实例} $\overline{\Delta\mathrm{HV}}/\overline{\mathrm{HV}}_{\text{上一级}}$ 的跨实例均值（不用 $\overline{\Delta/\mathrm{HV}}$：效应$\approx 0$ 时会反号）。$d_z$ 为 run 级池化配对效应量（$n=\RunN$），$p$ 为实例级 Wilcoxon（$n=\DevN$）。盒口径一列是\textbf{同一批数据}换口径重算的结果，用来量化口径的影响；正文的效应量一律取实例边界口径。\end{minipage}
 \end{table}

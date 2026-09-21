@@ -3111,7 +3111,11 @@ class TestPaperNumbersHaveOneSource(unittest.TestCase):
         for line in io.open(path, encoding="utf-8"):
             if "&" not in line:
                 continue
-            cells = [c.strip() for c in line.split("&")]
+            # 表格里的负号是 Unicode 减号 U+2212（文本模式要它才排得对），而
+            # `macros.tex` 里的宏是 ASCII 连字符（宏在数学模式里用，LaTeX 自己会
+            # 渲染成减号）。**同一个数、两种合法写法**——比较前统一，否则会把
+            # 它们误判成"正文与表格不同源"。
+            cells = [c.strip().replace("\u2212", "-") for c in line.split("&")]
             rows[cells[0].replace("$|$", "|")] = cells
         return rows
 
@@ -3865,6 +3869,183 @@ class TestLiteralScannerSkipsPreamble(unittest.TestCase):
     def test_body_only_is_a_noop_without_begin_document(self):
         s = "\\renewcommand{\\topfraction}{0.9}\n"
         self.assertEqual(self.mod.body_only(s), s)
+
+
+class TestNumberFormattingHygiene(unittest.TestCase):
+    """数字格式化的两条纪律（2026-09-21，"再详细检查一遍图表"）。
+
+    检查图表时在两个地方撞见同一个毛病：**负零**。
+
+      - `tab_surface` 的 RL 选算子行：`+0.000` 与 `-0.000` **并排**（真实值
+        +0.000269 与 −0.000157）—— 读者完全无法区分两者，而"负的零"本身
+        就是荒谬的显示；
+      - 阶梯图 `RMOEAD|D5` 的柱顶：`"%+.2f" % -0.003069` 得到 `-0.00`。
+
+    这与"无实例 ΔHV 精确为 0、只写与 0 不可区分"（缺陷 28）是同一条纪律的两面：
+    **读者必须能从数字本身看出它是不是 0。**
+
+    另一条是把负号从 ASCII 连字符换成 Unicode 减号 U+2212：连字符排出来明显
+    偏短，而表 6 标题的 `$\\lambda_0\\ge -1.0\\%$`、表注里的 `$\\HKthr\\%$` 都在
+    数学模式里用的是长减号——同一页出现两种减号。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        cls.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        spec = importlib.util.spec_from_file_location(
+            "_pe_num", os.path.join(cls.root, "scripts", "paper_export.py"))
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_negative_zero_is_never_printed(self):
+        m = self.mod
+        for x, nd, bad in ((-0.000157, 3, "-0.000"),
+                           (-0.003069, 2, "-0.00"),
+                           (0.000269, 3, "+0.000")):
+            self.assertNotEqual(m.num(x, nd), bad,
+                                "num(%.6f, %d) 仍输出 %r：非零数被抹成零，"
+                                "读者无法与真正的 0 区分" % (x, nd, bad))
+
+    def test_genuine_zero_still_prints_as_zero(self):
+        self.assertEqual(self.mod.num(0, 3), "+0.000")
+
+    def test_first_significant_digit_is_visible(self):
+        m = self.mod
+        self.assertEqual(m.num(-0.000157, 3), "\u22120.0002")
+        self.assertEqual(m.num(0.000269, 3), "+0.0003")
+        self.assertEqual(m.num(-0.003069, 2), "\u22120.003")
+        # 常规量级不受影响：精度仍是 nd 位小数
+        self.assertEqual(m.num(3.405604, 3), "+3.406")
+        self.assertEqual(m.num(0.029753, 3), "+0.030")
+
+    def test_minus_is_unicode_not_ascii_hyphen(self):
+        s = self.mod.num(-0.5, 2)
+        self.assertIn("\u2212", s, "负号应为 Unicode 减号 U+2212")
+        self.assertNotIn("-", s,
+                         "还在用 ASCII 连字符当负号——它比数学模式里的减号短，"
+                         "同一页会出现两种减号")
+
+    def test_no_negative_zero_survives_into_generated_tables(self):
+        """格式对了还不够：产物里也得干净。"""
+        tabdir = os.path.join(self.root, "paper", "tables")
+        bad = []
+        for name in sorted(os.listdir(tabdir)):
+            if not name.startswith("tab_") or not name.endswith(".tex"):
+                continue
+            with io.open(os.path.join(tabdir, name), encoding="utf-8") as fh:
+                t = fh.read()
+            for m in re.finditer(r"[\u2212+-]0\.0+(?![0-9])", t):
+                bad.append((name, m.group(0)))
+        self.assertEqual([], bad,
+                         "生成物里仍有「负零/零」样式的数字（非零数被抹成 0）：%s" % bad)
+
+
+class TestEveryFigureAndTableIsReachable(unittest.TestCase):
+    """每张表/图都必须被正文引用——否则它是一张"死图/死表"。
+
+    查产物时发现 `fig:gate`（门控分离图）**从头到尾没有一句"见图 6"**：
+    caption 写得很完整（横轴是什么、门限在哪、该看什么），但正文完全没提它，
+    读者得自己翻到第 16 页才知道有这张图。这与"表排到参考文献之后"同族：
+    东西在，但读者找不到。
+    """
+
+    def setUp(self):
+        self.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        self.main = os.path.join(self.root, "paper", "main.tex")
+        self.export = os.path.join(self.root, "scripts", "paper_export.py")
+
+    def test_every_tab_and_fig_label_is_referenced(self):
+        with io.open(self.main, encoding="utf-8") as fh:
+            src = fh.read()
+        labels = set(re.findall(r"\\label\{((?:tab|fig):[^}]+)\}", src))
+        tabdir = os.path.join(self.root, "paper", "tables")
+        for name in sorted(os.listdir(tabdir)):
+            if name.endswith(".tex"):
+                with io.open(os.path.join(tabdir, name), encoding="utf-8") as fh:
+                    labels |= set(re.findall(r"\\label\{((?:tab|fig):[^}]+)\}",
+                                             fh.read()))
+        refs = set(re.findall(r"\\ref\{([^}]+)\}", src))
+        orphan = sorted(labels - refs)
+        self.assertEqual([], orphan,
+                         "这些表/图从未被正文 \\ref 引用，读者不知道它们存在：%s"
+                         % orphan)
+
+    def test_no_dangling_ref(self):
+        """反向：引用必须都有落点，否则 PDF 里会出现 `??`。"""
+        with io.open(self.main, encoding="utf-8") as fh:
+            src = fh.read()
+        labels = set(re.findall(r"\\label\{([^}]+)\}", src))
+        tabdir = os.path.join(self.root, "paper", "tables")
+        for name in sorted(os.listdir(tabdir)):
+            if name.endswith(".tex"):
+                with io.open(os.path.join(tabdir, name), encoding="utf-8") as fh:
+                    labels |= set(re.findall(r"\\label\{([^}]+)\}", fh.read()))
+        dangling = sorted(set(re.findall(r"\\ref\{([^}]+)\}", src)) - labels)
+        self.assertEqual([], dangling, "这些 \\ref 没有对应的 \\label：%s" % dangling)
+
+    def _fig_sources(self):
+        """把 paper_export.py 按 `def fig_*` 切段，返回 {函数名: 函数体源码}。"""
+        with io.open(self.export, encoding="utf-8") as fh:
+            src = fh.read()
+        starts = list(re.finditer(r"^def (fig_\w+)\(", src, re.M))
+        figs = {}
+        for i, m in enumerate(starts):
+            end = starts[i + 1].start() if i + 1 < len(starts) else len(src)
+            figs[m.group(1)] = src[m.start():end]
+        return src, figs
+
+    def test_a_figure_that_sets_labels_must_call_legend(self):
+        """设了 `label=` 却不调 `legend()` = 死代码，且读者看不到图例。
+
+        `fig_concept` 的 (b) 栏就栽在这里：两个散点都带了 `label=`
+        （"Pareto front"、"reference point ref =(1.02,1.02)"），
+        但整个 (b) 没有 `ax.legend()` —— ★ 是什么、红点是什么，
+        读者只能从 caption 猜。
+        """
+        _src, figs = self._fig_sources()
+        bad = [name for name, body in figs.items()
+               if "label=" in body and ".legend(" not in body]
+        self.assertEqual([], bad, "这些 fig_* 设了 label= 却没调 legend()：%s" % bad)
+
+    def test_both_panels_of_the_concept_figure_have_a_legend(self):
+        """(a)(b) 两栏各自都要有图例——上面的通用锁抓不住"(a) 有、(b) 漏"。"""
+        _src, figs = self._fig_sources()
+        body = figs.get("fig_concept", "")
+        self.assertGreaterEqual(
+            body.count(".legend("), 2,
+            "fig_concept 有 %d 处 label= 却只有 %d 处 legend()："
+            "两栏各需一个图例" % (body.count("label="), body.count(".legend(")))
+
+
+class TestTableNotesDoNotHardcodeSettings(unittest.TestCase):
+    """表注里的设置参数必须走宏——生成文件里的硬编码比手写正文更危险。
+
+    「一个数字一个来源」在正文里已经守住了（正文只写宏名），但表注是导出器
+    拼出来的字符串：`$n=30$`、`30-seed`、`$\\lambda_0(30)$`、`门限 $-1.0\\%$`
+    这些写法**看起来最权威**（它们是产物的一部分），却完全不随 `SET_SEEDS`
+    或 `\\HKthr` 更新。
+    """
+
+    BAD = ((re.compile(r"\$n\s*=\s*30\$"), "\\SetSeeds（表注用 $n=\\SetSeeds$）"),
+           (re.compile(r"30-seed"), "\\SetSeeds（表注用 \\SetSeeds-seed）"),
+           (re.compile(r"\\lambda_0\(30\)"), "\\SetSeeds（表头用 $\\lambda_0(\\SetSeeds)$）"),
+           (re.compile(r"门限\s*\$-1\.0\\%\$"), "\\HKthr（表注用 $\\HKthr\\%$）"))
+
+    def test_no_hardcoded_setting_in_notes_or_captions(self):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        tabdir = os.path.join(root, "paper", "tables")
+        bad = []
+        for name in sorted(os.listdir(tabdir)):
+            if not name.startswith("tab_") or not name.endswith(".tex"):
+                continue
+            with io.open(os.path.join(tabdir, name), encoding="utf-8") as fh:
+                t = fh.read()
+            for pat, fix in self.BAD:
+                for m in pat.finditer(t):
+                    bad.append((name, m.group(0), fix))
+        self.assertEqual([], bad,
+                         "表注/表头里写死了设置参数（应改为宏引用）：%s" % bad)
 
 
 if __name__ == "__main__":

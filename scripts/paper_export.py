@@ -116,9 +116,30 @@ def ptex(p):
 
 
 def num(x, nd=3, signed=True):
+    """把数字格式化成固定小数位，**但绝不允许出现「负零」**。
+
+    `"%.3f" % -0.000157` 得到 `-0.000`——既荒唐（负的零是什么？），又与同一行的
+    `"%.3f" % +0.000269`（`+0.000`）**完全无法区分**；`"%+.2f" % -0.003069`
+    同理得到 `-0.00`。这两个都不是假想：它们分别是 `tab_surface` 的 RL 选算子行
+    和阶梯图 `RMOEAD|D5` 柱顶的真实输出。
+
+    规则：只有当四舍五入会把一个**非零**数抹成 `±0.00…0` 时，才自动增加小数位，
+    直到第一位有效数字出现；真正等于 0 的数照旧输出 `+0.000`。
+    这与"无实例 ΔHV 精确为 0、只写与 0 不可区分"是同一条纪律的两面：
+    **读者必须能从数字本身看出它是不是 0。**
+    """
     if x is None or not np.isfinite(x):
         return "--"
-    return ("%+.*f" if signed else "%.*f") % (nd, x)
+    fmt = "%+.*f" if signed else "%.*f"
+    if x == 0:
+        return fmt % (nd, x)
+    # 首位有效数字落在第几位小数上（x=±3.07e-3 -> 3，x=±1.57e-4 -> 4）
+    k = int(np.ceil(-np.log10(abs(x))))
+    s = fmt % (max(nd, k), x)
+    # 负号用 Unicode 减号 U+2212，不用 ASCII 连字符：连字符排出来明显偏短，而数学模式
+    # 里的减号（如表 6 标题的 $\lambda_0\ge -1.0\%$、表注的 $\HKthr\%$）是正确的长减号
+    # ——同一页出现两种减号。XeTeX 是 Unicode 引擎，可直接输出该字符（缺字会被交付判据拦住）。
+    return s.replace("-", "\u2212") if s.startswith("-") else s
 
 
 def need(path, allow_missing, what):
@@ -323,7 +344,8 @@ def tab_instances(data, allow_missing):
     n_hed = 0
     notes = ("弹性比 = 每道工序可选机器数的均值；$c_v$ = 模糊三角加工时间的变异系数。"
              "Mk01--Mk10 用于复现、消融与\\textbf{门限标定}；"
-             "(a) 段 10 行续排为 5+5。")
+             "(a) 段 %d 行续排为 %d+%d。"
+             % (len(mk_cells), half_mk, len(mk_cells) - half_mk))
     if meta:
         grp = collections.defaultdict(int)
         for k, v in meta.items():
@@ -414,11 +436,11 @@ def tab_ladder(data, allow_missing):
         "& 相对增幅(\\%) & 放大 \\\\\n"
         "    \\midrule\n" + "\n".join(body),
         "llrrlrrr", font="\\footnotesize", colsep=4.5,
-        notes=("Mk01--Mk10，每格 $n=30$ seeds 同 seed 配对。"
+        notes=("Mk01--Mk10，每格 $n=\\SetSeeds$ seeds 同 seed 配对。"
                "$\\Delta$HV 相对增幅为\\textbf{逐实例} $\\overline{\\Delta\\mathrm{HV}}/"
                "\\overline{\\mathrm{HV}}_{\\text{上一级}}$ 的跨实例均值"
                "（不用 $\\overline{\\Delta/\\mathrm{HV}}$：效应$\\approx 0$ 时会反号）。"
-               "$d_z$ 为 run 级池化配对效应量（$n=300$），$p$ 为实例级 Wilcoxon（$n=10$）。"
+               "$d_z$ 为 run 级池化配对效应量（$n=\\RunN$），$p$ 为实例级 Wilcoxon（$n=\\DevN$）。"
                "盒口径一列是\\textbf{同一批数据}换口径重算的结果，用来量化口径的影响；"
                "正文的效应量一律取实例边界口径。")))
     data["ladder"] = {k: {"rel_inst": v["inst"]["rel_mean"], "rel_box": v["box"]["rel_mean"],
@@ -459,6 +481,12 @@ def fig_surface(data, allow_missing):
     axes[1].set_ylabel("paired $d_z$", fontsize=7.4)
     axes[1].set_title("(b) standardised effect", fontsize=7.8)
     for ax in axes:
+        # 数据点是 0.10/0.25/0.50/0.75/1.00，而 matplotlib 的自动刻度落在
+        # 0.2/0.4/0.6/0.8/1.0——与数据点**错位**，读者没法从轴上读出每个点
+        # 对应哪个预算档（caption 里写的却是 10/25/50/75/100%）。
+        # 把刻度钉死在这 5 个档上并直接写成百分比。
+        ax.set_xticks(x)
+        ax.set_xticklabels(["%d%%" % round(b * 100) for b in x])
         ax.set_xlabel("wall-clock budget fraction", fontsize=7.4)
         ax.axhline(0, color="k", lw=0.6, ls=":")
         ax.tick_params(labelsize=6.6)
@@ -551,14 +579,14 @@ def tab_targets(data, allow_missing):
         "& $\\Delta$HV(\\%) & 胜出 & $p$ \\\\\n"
         "    \\midrule\n" + "\n".join(body),
         "rrrrrrrr", font="\\footnotesize",
-        notes=("$n=%d$ seeds，同 seed 配对；$\\Delta$HV 为实例边界口径的相对增幅。"
+        notes=("$n=\\SetSeeds$ seeds，同 seed 配对；$\\Delta$HV 为实例边界口径的相对增幅。"
                "目标 A 上 %d/%d 为正（“好起点”这一级确有普遍收益），"
-               "但\\textbf{目标 B 只有 %d/%d 显著、其余 %d 个\\textbf{与 0 不可区分}}"
+               "但\\textbf{目标 B 只有 %d/%d 显著、其余 %d 个与 0 不可区分}"
                "（配对 Wilcoxon $p\\ge%s$；注意 $\\Delta$HV 并非精确的 0，"
                "非显著实例中仍为正的最大者是 $%s\\%%$，故“有增益”必须按显著性而非非零来判）："
                "MWR 的净增量是全有或全无，并非“普遍成立但幅度较小”。"
                "拿 A 的结论回答 B 的问题即为目标量错位（缺陷 26）。"
-               % (SET_SEEDS, len(apos), len(insts), len(bsig), len(insts), len(bns),
+               % (len(apos), len(insts), len(bsig), len(insts), len(bns),
                   "%.2f" % _bns_pmin,
                   num(_bns_posmax, 3)))))
 
@@ -573,7 +601,11 @@ def tab_targets(data, allow_missing):
     ax.invert_yaxis()
     ax.axvline(0, color="k", lw=0.6)
     ax.set_xlabel("$\\Delta$HV relative gain (\\%)", fontsize=7)
-    ax.legend(fontsize=6, frameon=False, loc="lower right")
+    # 图例不能放 lower right：Mk10 的 A 值（+8.69%）是全图最大，而 `invert_yaxis`
+    # 后它就在最下面一行——图例正好压在 Mk09/Mk10 的条上，且 legend 是
+    # `frameon=False`（透明无底），读者会把图例色块当成 Mk09 条的延伸。
+    # upper right 那一带（Mk01/Mk02 行、x>4）是空的。
+    ax.legend(fontsize=6, frameon=False, loc="upper right")
     ax.tick_params(labelsize=6.4)
     ax.grid(alpha=0.25, lw=0.4, axis="x")
     save_fig(fig, "fig_targets.pdf")
@@ -743,7 +775,10 @@ def hurink_gate(data, allow_missing):
         "tab:hurink",
         "\n".join(rows),
         "rrrrrlr@{\\hspace{6pt}}rrrrrlr",
-        font="\\scriptsize", colsep=3,
+        # colsep 3 -> 2.6：负号改用 Unicode 减号 U+2212 后，minus 比 ASCII 连字符
+        # 宽（8pt 字号下约 1.8 pt/个），这张 14 列的密集表最长行会顶出 4.55 pt。
+        # 14 列共 28 个 tabcolsep 间隙，减 0.4 pt 可省 11.2 pt，留出余量。
+        font="\\scriptsize", colsep=2.6,
         notes=("$\\lambda_0$ 为\\textbf{零代探针}给出的初始前沿 HV 杠杆（MWR $-$ MIX3，"
                r"只调一次 \texttt{\_init\_population()}，不做任何搜索）。"
                # 门限与显著性门槛直接引用**正文用的那两个宏**（\HKthr / \SigLevel）：
@@ -775,7 +810,8 @@ def hurink_gate(data, allow_missing):
            len(hold), chol["tp"], chol["fp"], chol["fn"], chol["tn"],
            (chol["tp"] + chol["tn"]) / max(len(hold), 1)),
         "lrrrrrr",
-        notes=("“命中”= 预测有增益且确实有；“误放”= 预测有而实际为 0；"
+        notes=("“有增益”按配对 Wilcoxon $p<\\SigLevel$ 且 $\\Delta$HV$>0$ 判定。"
+               "“命中”= 预测有增益且确实有；“误放”= 预测有而实际\\textbf{与 0 不可区分}；"
                "“漏放”= 预测没有而实际有。开发集是门限的标定集，"
                "只有留出集一列是无偏的。")))
 
@@ -849,7 +885,7 @@ def tab_probe_seeds(data, allow_missing):
         print("  [!] 缺 logs/probe_seed_var.json -> 跳过 seed 方差表")
         return None
     d = load_json(p)
-    NS = [1, 3, 5, 10, 30]
+    NS = [1, 3, 5, 10, SET_SEEDS]
     body = []
     for r in d["rows"]:
         cells = [num(r["lam30"], 2)]
@@ -864,16 +900,16 @@ def tab_probe_seeds(data, allow_missing):
         "零代探针在不同 seed 预算下的稳定性（%s）" % d.get("set_name", "Mk01--Mk10"),
         "tab:probe_seeds",
         "    \\multicolumn{2}{c}{} & \\multicolumn{4}{c}{$\\lambda_0$ 的子集标准差} & "
-        "\\multicolumn{4}{c}{与 30-seed 判定的一致率} \\\\\n"
+        "\\multicolumn{4}{c}{与 \\SetSeeds-seed 判定的一致率} \\\\\n"
         "    \\cmidrule(lr){3-6}\\cmidrule(lr){7-10}\n"
-        "    实例 & $\\lambda_0(30)$ & $n{=}1$ & $n{=}3$ & $n{=}5$ & $n{=}10$ "
+        "    实例 & $\\lambda_0(\\SetSeeds)$ & $n{=}1$ & $n{=}3$ & $n{=}5$ & $n{=}10$ "
         "& $n{=}1$ & $n{=}3$ & $n{=}5$ & $n{=}10$ \\\\\n"
         "    \\midrule\n" + "\n".join(body) +
         "\n    \\midrule\n    \\textit{跨实例均值} & -- & " + summ + " & " + agr + " \\\\",
         "rrrrrrrrrr", font="\\footnotesize",
         notes=("对每个实例枚举/抽样 $n$ 个 seed 的子集，用与正式探针完全相同的估计量"
-               "（先对 seed 求均值再作比）重算 $\\lambda_0$，再看判定是否与 30-seed 一致。"
-               r"门限 $-1.0\%$；子集数见 \texttt{logs/probe\_seed\_var.json}。")))
+               "（先对 seed 求均值再作比）重算 $\\lambda_0$，再看判定是否与 \\SetSeeds-seed 一致。"
+               "门限 $\\HKthr\\%$；子集数见 \\texttt{logs/probe\\_seed\\_var.json}。")))
     data["probe_seeds"] = d
     return d
 
@@ -918,9 +954,11 @@ def fig_ladder(data, allow_missing):
     ax.axhline(0, color="k", lw=0.7)
     ax.set_ylabel("$\\Delta$HV relative gain (\\%)", fontsize=7.4)
     for xi, v, b in zip(x, ri, rb):
-        ax.text(xi - 0.2, v, "%+.2f" % v, ha="center", fontsize=5.8,
+        # 用 num() 而非 "%+.2f"：RMOEAD|D5 的真实值 -0.003069 会被 "%+.2f"
+        # 抹成 "-0.00"（负零），读者会以为它是精确的 0（缺陷 28 的同一类错误）。
+        ax.text(xi - 0.2, v, num(v, 2), ha="center", fontsize=5.8,
                 va="bottom" if v >= 0 else "top")
-        if abs(v) > 1e-12 and np.isfinite(b / v):
+        if abs(v) > NZ_EPS and np.isfinite(b / v):
             ax.text(xi + 0.2, b, "%.1f$\\times$" % (b / v), ha="center", fontsize=5.8,
                     va="bottom" if b >= 0 else "top", color=C_RED)
     ax.legend(fontsize=6.4, frameon=False)
@@ -981,11 +1019,15 @@ def fig_concept(data, allow_missing):
                     lw=0, zorder=1)
     ax.plot(pf[:, 0], pf[:, 1], "-", color=C_RED, lw=1.2, zorder=2)
     ax.scatter(pf[:, 0], pf[:, 1], s=32, color=C_RED, zorder=4,
-               label="Pareto 前沿")
+               label="Pareto front")
     ax.scatter([rx], [ry], s=46, marker="*", color="k", zorder=5,
                label="reference point ref $=(%.2f,%.2f)$" % REF)
     ax.text(0.06, 0.92, "HV = shaded area\n(one scalar per front)",
             fontsize=6.0, zorder=6)
+    # (b) 的两个散点一直带着 `label=` 却**从未调用 legend()** —— 于是 ★ 到底
+    # 是什么、红点是什么，读者只能从 caption 猜。这里补上（与 (a) 同位置同字号）。
+    ax.legend(fontsize=5.9, frameon=False, loc="lower left",
+              bbox_to_anchor=(-0.015, -0.02))
     ax.set_title("(b) Hypervolume (HV):\nfirst normalize both objectives", fontsize=8)
 
     for ax in axes:
