@@ -1,6 +1,6 @@
 \begin{table}[t]
   \centering
-  \caption{独立留出集（Hurink $e$-data，$n=66$）：零代探针 $\lambda_0$ 与 MWR 净增量（左右两栏续排，左栏 Hed01--，右栏续接）}
+  \caption{独立留出集（Hurink $e$-data，$n=66$）：零代探针 $\lambda_0$ 与 MWR 净增量（左右两栏续排：左栏 Hed01--Hed33，右栏 Hed34--Hed66）}
   \label{tab:hurink}
   \scriptsize
   {\setlength{\tabcolsep}{3pt}%
@@ -44,5 +44,5 @@
     \bottomrule
   \end{tabular}
   }
-  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}$\lambda_0$ 为\textbf{零代探针}给出的初始前沿 HV 杠杆（MWR $-$ MIX3，只调一次 \texttt{\_init\_population()}，不做任何搜索）。门限 $\lambda_0\ge -1.0\%$ 在开发集（Mk01--Mk10）上标定后\textbf{冻结}。\textbf{「显著为正」= $\Delta$HV$>0$ 且配对 Wilcoxon $p<0.05$} —— 不是「$\Delta$HV$\neq 0$」：两个实例集上都\textbf{没有} $\Delta$HV 精确为 0 的实例（开发集最小非零为 $-0.01\%$），用非零当判据会把全部实例判成有增益。留出集上显著为正的实例为 10/66，门控判对 46/66。\end{minipage}
+  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}$\lambda_0$ 为\textbf{零代探针}给出的初始前沿 HV 杠杆（MWR $-$ MIX3，只调一次 \texttt{\_init\_population()}，不做任何搜索）。门限 $\lambda_0\ge\HKthr\%$ 在开发集（Mk01--Mk10）上标定后\textbf{冻结}。\textbf{「显著为正」= $\Delta$HV$>0$ 且配对 Wilcoxon $p<\SigLevel$} —— 不是「$\Delta$HV$\neq 0$」：两个实例集上都\textbf{没有} $\Delta$HV 精确为 0 的实例（开发集最小非零为 $-0.01\%$），用非零当判据会把全部实例判成有增益。留出集上显著为正的实例为 10/66，门控判对 46/66。\end{minipage}
 \end{table}

@@ -323,7 +323,10 @@ def tab_instances(data, allow_missing):
         body.append("    \\midrule\n    \\multicolumn{12}{l}{\\textit{"
                     "Hurink 留出集数据未就绪}}\\\\")
     write_tex("tab_instances.tex", table_wrap(
-        "实例集特征（(b) 段左右两栏续排）", "tab:instances", "\n".join(body),
+        "实例集特征：(a) 开发集 Brandimarte Mk01--Mk10（只占左栏）；"
+        "(b) 留出集 Hurink $e$-data，按 (工件, 机器, 工序) 分组合并后"
+        "续排为左右两栏",
+        "tab:instances", "\n".join(body),
         "lrrrrr@{\\hspace{10pt}}lrrrrr", font="\\footnotesize", colsep=4,
         notes=notes))
     return {"brandimarte": rows_mk, "n_hurink": n_hed}
@@ -407,13 +410,18 @@ def fig_surface(data, allow_missing):
     name = {"D2|D1": "MIX3 init ($D2|D1$)", "D5|D2": "Elite archive ($D5|D2$)",
             "RMOEAD|D5": "RL operator (RMOEAD$|$D5)"}
     col = {"D2|D1": C_RED, "D5|D2": C_BLUE, "RMOEAD|D5": C_GREEN}
-    x = np.array([0.1, 0.25, 0.5, 0.75, 1.0])
+    x = np.array(SURF_BUDGETS)
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.7))
     for key in pairs:
         if key not in d["wall"]:
             continue
         ys = np.asarray([[w["diff"] for w in d["wall"][key][i]] for i in insts], float)
         zs = np.asarray([[w["dz"] for w in d["wall"][key][i]] for i in insts], float)
+        # 横轴长度必须与数据一致：`anytime_g2000.surface.json` 里换掉预算档
+        # 而没同步 `SURF_BUDGETS`，`plot()` 会静默按较长者截断/补点，图仍能出。
+        if ys.shape[1] != len(x):
+            raise SystemExit("[错误] %s 的预算档有 %d 个，SURF_BUDGETS 有 %d 个——"
+                             "两者必须同源" % (key, ys.shape[1], len(x)))
         axes[0].plot(x, ys.mean(axis=0), "o-", color=col[key], lw=1.4, ms=3.4, label=name[key])
         axes[1].plot(x, zs.mean(axis=0), "o-", color=col[key], lw=1.4, ms=3.4, label=name[key])
     axes[0].set_ylabel("$\\Delta$HV (abs.)", fontsize=7.4)
@@ -461,7 +469,8 @@ def fig_surface(data, allow_missing):
         "    臂对 & 组件 & " + " & ".join(insts) + " \\\\\n    \\midrule\n" + "\n".join(body),
         "ll" + "r" * len(insts),
         notes=("每列一个实例；预算按\\textbf{墙钟}（\\texttt{anytime} 轨迹）分五分位"
-               "（$10/25/50/75/100\\%$，$G$ 上限 2000）。把算力加到上限以后，"
+               # 预算档与 G 上限都引用正文宏，杜绝"表注写 2000、正文写 \SetGMax"。
+               "（\\SurfBudgets，$G$ 上限 \\SetGMax）。把算力加到上限以后，"
                "除初始化以外的组件增量都不超过 " + _mtxt
                + "（最大者为 %s，绝对值）。" % _mxlab)))
     data["surface"] = {k: {i: [w["diff"] for w in d["wall"][k][i]] for i in insts}
@@ -488,7 +497,7 @@ def tab_targets(data, allow_missing):
                     % (inst, num(a["dhv_rel_pct"]), a["wins"], a["n"], num(a["dz"], 2),
                        ptex(a["p"]), num(b["dhv_rel_pct"]), b["wins"], b["n"],
                        ptex(b["p"])))
-    nz = [i for i in insts if abs(B[i]["dhv_rel_pct"]) > 1e-9]
+    nz = [i for i in insts if abs(B[i]["dhv_rel_pct"]) > NZ_EPS]
     # 表注里"10/10 为正、3/10 显著、p>=0.17、最大者 +0.02%"原先全是**写死**的
     # （生成文件里的硬编码比手写正文更危险：它看起来最权威）。改为现场算。
     apos = [i for i in insts if A[i]["dhv_rel_pct"] > 0]
@@ -512,14 +521,14 @@ def tab_targets(data, allow_missing):
         "& $\\Delta$HV(\\%) & 胜出 & $p$ \\\\\n"
         "    \\midrule\n" + "\n".join(body),
         "rrrrrrrr", font="\\footnotesize",
-        notes=("$n=30$ seeds，同 seed 配对；$\\Delta$HV 为实例边界口径的相对增幅。"
+        notes=("$n=%d$ seeds，同 seed 配对；$\\Delta$HV 为实例边界口径的相对增幅。"
                "目标 A 上 %d/%d 为正（“好起点”这一级确有普遍收益），"
                "但\\textbf{目标 B 只有 %d/%d 显著、其余 %d 个\\textbf{与 0 不可区分}}"
                "（配对 Wilcoxon $p\\ge%s$；注意 $\\Delta$HV 并非精确的 0，"
-               "非显著实例中仍为正的最大者是 $%s\\%%$，故\"有增益\"必须按显著性而非非零来判）："
+               "非显著实例中仍为正的最大者是 $%s\\%%$，故“有增益”必须按显著性而非非零来判）："
                "MWR 的净增量是全有或全无，并非“普遍成立但幅度较小”。"
                "拿 A 的结论回答 B 的问题即为目标量错位（缺陷 26）。"
-               % (len(apos), len(insts), len(bsig), len(insts), len(bns),
+               % (SET_SEEDS, len(apos), len(insts), len(bsig), len(insts), len(bns),
                   "%.2f" % _bns_pmin,
                   num(_bns_posmax, 3)))))
 
@@ -562,6 +571,28 @@ def tab_targets(data, allow_missing):
 #
 # 判据显式定为：**ΔHV > 0 且配对 Wilcoxon p < 0.05**（与 docs 里"3/10 显著"同源）。
 GAIN_P = 0.05
+
+# "非零"的数值阈值。**只用于筛出可举例的最小非零值**（如表注要举一个
+# "确实很小、却不显著"的反例），**绝不用作"有增益"的判据**——
+# 判据只有一个地方，即下面的 `is_gain()`（缺陷 29：把"非零"当判据会让
+# 判对率从 1.00 掉到 0.30，且不报任何错）。
+# 具名而非内联字面量，是为了让"这里筛的是样例、不是判据"在阅读时一眼可辨；
+# `TestGateGainCriterion` 另有锁确保它没被混进 `is_gain()`。
+NZ_EPS = 1e-9
+
+# ── 实验设置常量：正文里的**设置**数字与效应量守同一条规矩（单一来源）──
+# 设置值（种群、代数、seed 区间、预算档）看似不会漂移，但正文里"30 个 seed"
+# 与 `\SetSeeds` 混写的先例已经出现过：只要协议一改，手写的那几处就静默失配，
+# 而它们分散在摘要、§3.2、§5.4、§6、§7 各处，肉眼很难查全。
+DEV_N = 10                    # 开发集实例数（Brandimarte Mk01--Mk10）
+SEED_LO, SEED_HI = 42, 71     # 每个配置的随机种子区间（含两端）
+# 本轮实际执行的设置（`logs/` 里每个 run 的 components 可核）。
+# 提到模块级：生成表的表注（如 `tab_targets`）也要用同一套值。
+SET_NP, SET_G, SET_GMAX, SET_SEEDS = 100, 200, 2000, 30
+# 响应面的五档墙钟预算分数。**这同一个列表必须同时驱动图与正文宏**：
+# 图用 `np.array(SURF_BUDGETS)` 画横轴、宏从它生成"10%,25%,…"，
+# 否则"图上有 5 个点、正文却写 10%"这类失配没有任何机制能发现。
+SURF_BUDGETS = (0.10, 0.25, 0.50, 0.75, 1.00)
 
 
 def is_gain(dhv_rel_pct, p):
@@ -634,7 +665,8 @@ def hurink_gate(data, allow_missing):
                       sorted(set(hold) - set(prereg))[:5]))
             if not allow_missing:
                 raise SystemExit("[错误] " + msg)
-            print("  [!] " + msg + " -> 表按实际覆盖写出，但正文的\"全部 66 个\"会不成立")
+            print("  [!] " + msg + " -> 表按实际覆盖写出，但正文\u201c全部实例\u201d的"
+                  "说法会不成立")
     n_gain = sum(1 for i in hold if is_gain(B[i]["dhv_rel_pct"], B[i]["p"]))
     agree = sum(1 for i in hold
                 if (lam[i] >= THR) == is_gain(B[i]["dhv_rel_pct"], B[i]["p"]))
@@ -658,19 +690,41 @@ def hurink_gate(data, allow_missing):
     for k in range(half):
         r = right[k] if k < len(right) else " & ".join([""] * 7)
         rows.append("    %s & %s \\\\" % (left[k], r))
+    # 表注断言"两个实例集上都没有 ΔHV 精确为 0 的实例"——这是**可检验**的，
+    # 就不能只当修辞写：只要有一个实例真为 0，这句就是假陈述，而它恰恰是
+    # "用非零当判据会把全部实例判成有增益"这条论证的前提。
+    _zeros = [i for i, v in list(B.items()) + list(mkT.items())
+              if abs(v["dhv_rel_pct"]) <= NZ_EPS]
+    if _zeros:
+        raise SystemExit("[错误] 表注断言「没有 ΔHV 精确为 0 的实例」不成立：%s" % _zeros)
+    # "最小非零"只在**开发集**上取（表注要的正是开发集那一侧的反例）。
+    _devnz = [v["dhv_rel_pct"] for v in mkT.values()
+              if abs(v["dhv_rel_pct"]) > NZ_EPS]
+    _min_nz = min(_devnz, key=abs) if _devnz else 0.0
+    # 标题里的两栏区间**现场取**：原先写死"左栏 Hed01--"，"--"后面是空的
+    # （一个悬空的区间），读者看不出左栏到哪儿为止，改了实例集更无从核对。
+    cap = ("独立留出集（Hurink $e$-data，$n=%d$）：零代探针 $\\lambda_0$ 与 MWR 净增量"
+           % len(hold))
+    if half:
+        cap += ("（左右两栏续排：左栏 %s--%s，右栏 %s--%s）"
+                % (hold[0], hold[half - 1], hold[half], hold[-1]))
     write_tex("tab_hurink.tex", table_wrap(
-        "独立留出集（Hurink $e$-data，$n=%d$）：零代探针 $\\lambda_0$ 与 MWR 净增量"
-        "（左右两栏续排，左栏 Hed01--，右栏续接）" % len(hold),
+        cap,
         "tab:hurink",
         "\n".join(rows),
         "rrrrrlr@{\\hspace{6pt}}rrrrrlr",
         font="\\scriptsize", colsep=3,
         notes=("$\\lambda_0$ 为\\textbf{零代探针}给出的初始前沿 HV 杠杆（MWR $-$ MIX3，"
                r"只调一次 \texttt{\_init\_population()}，不做任何搜索）。"
-               "门限 $\\lambda_0\\ge -1.0\\%$ 在开发集（Mk01--Mk10）上标定后\\textbf{冻结}。"
-               "\\textbf{「显著为正」= $\\Delta$HV$>0$ 且配对 Wilcoxon $p<0.05$} —— "
+               # 门限与显著性门槛直接引用**正文用的那两个宏**（\HKthr / \SigLevel）：
+               # 表注里手写的 "-1.0%" 与正文明的 `\HKthr` 是同一个量，
+               # 两处来源必然漂移；写成宏则物理上不可能不一致。
+               "门限 $\\lambda_0\\ge\\HKthr\\%$ 在开发集（Mk01--Mk10）上标定后"
+               "\\textbf{冻结}。"
+               "\\textbf{「显著为正」= $\\Delta$HV$>0$ 且配对 Wilcoxon $p<\\SigLevel$} —— "
                "不是「$\\Delta$HV$\\neq 0$」：两个实例集上都\\textbf{没有} $\\Delta$HV 精确为 0 的实例"
-               "（开发集最小非零为 $-0.01\\%$），用非零当判据会把全部实例判成有增益。"
+               + ("（开发集最小非零为 $%s\\%%$）" % num(_min_nz, 2))
+               + "，用非零当判据会把全部实例判成有增益。"
                # 缺陷 36：这里**不能**对整段做 `%` 格式化 —— Python 的 `%` 不认
                # 反斜杠转义，LaTeX 的 `\%` 会被当成格式符（`\%` 后跟 `$` 直接
                # ValueError）。所以把两个计数单独格式化后再拼接。
@@ -679,7 +733,10 @@ def hurink_gate(data, allow_missing):
 
     # 门控混淆矩阵（开发 / 留出并排）
     write_tex("tab_gate.tex", table_wrap(
-        "零代门控的混淆矩阵（门限冻结在 $\\lambda_0\\ge-1.0\\%$）", "tab:gate",
+        # 门限用**正文那个宏**（\\HKthr 由 hk["thr"] 生成，与这里的 THR 同源）：
+        # 标题若自己格式化成 "-1%"、正文却是 "-1.0%"，同一门限就有了两种写法。
+        "零代门控的混淆矩阵（门限在开发集上标定后冻结：$\\lambda_0\\ge\\HKthr\\%$）",
+        "tab:gate",
         "    集合 & $n$ & 命中 & 误放 & 漏放 & 正确拒绝 & 判对率 \\\\\n    \\midrule\n"
         "    开发集 Mk01--Mk10 & %d & %d & %d & %d & %d & %.2f \\\\\n"
         "    留出集 Hurink $e$-data & %d & %d & %d & %d & %d & %.2f \\\\"
@@ -742,7 +799,7 @@ def fig_gate(data):
                    label=("development: Mk01--Mk10" if mkf
                           else "holdout: Hurink $e$-data ($n=%d$)" % len(hold)), zorder=3)
     ax.axvline(THR, color="k", lw=1.0, ls="--")
-    ax.text(THR + 0.2, 1.16, "gate $\\lambda_0=-1.0\\%$", fontsize=6.4)
+    ax.text(THR + 0.2, 1.16, "gate $\\lambda_0=%.1f\\%%$" % THR, fontsize=6.4)
     ax.set_xlabel("$\\lambda_0$ = initial-frontier HV leverage (\\%)", fontsize=7.4)
     ax.set_ylabel("net gain significant ($p<0.05$)", fontsize=7.4)
     ax.set_yticks([0, 1])
@@ -1071,8 +1128,9 @@ def write_macros(data, allow_missing, write=True):
                    if abs(hk["lambda"][i] - hk["thr"]) <= NEAR_BAND)
         m("HKnearHalf", near)
         tail = ("其中 %d 个实例的 $\\lam$ 落在门限 $\\pm\\HKnearBand$ 个百分点内——"
-                "这一带在开发集上已被证明即使 30 seeds 也判不稳"
-                "（\\S\\ref{sec:seedvar}），故判对率要连同它一起读。" % near)
+                "这一带在开发集上已被证明即使 %d seeds 也判不稳"
+                "（\\S\\ref{sec:seedvar}），故判对率要连同它一起读。"
+                % (near, SET_SEEDS))
         share = 100.0 * g / max(n, 1)
         # 缺陷 37：判对率**必须与平凡基线并列报**。留出集 66 个实例里只有 g 个
         # 真赚，所以"一律拒绝"的判对率 = (n-g)/n —— 它完全可能**高于**门控本身。
@@ -1375,8 +1433,8 @@ def write_macros(data, allow_missing, write=True):
     # —— 实验设置常量（正文里手写了 10 处以上）——
     # ref / N_p / G / n 这些值散落在 §1、§3.2、§3.6、§4.2、§5；改一次预算就要全改，
     # 且"改了数据忘了改正文"正是缺陷 30/32/34 的成因。宏化后只有一个来源。
-    # 值取自本轮实际执行的设置（logs/ 里每个 run 的 components 可核）。
-    SET_NP, SET_G, SET_GMAX, SET_SEEDS = 100, 200, 2000, 30
+    # 值取自本轮实际执行的设置（logs/ 里每个 run 的 components 可核）；
+    # 这四个常量已提到模块级，好让生成表的表注（`tab_targets`）也能引用。
     m("SetNp", SET_NP)
     m("SetG", SET_G)
     m("SetGMax", SET_GMAX)
@@ -1390,11 +1448,20 @@ def write_macros(data, allow_missing, write=True):
     # 又是置换重抽次数。不加区分就会被守卫判成"同一指标两处来源"。
     m("PctBase", 100)
     m("PermSubsets", 2000)
-    # 响应面的五档预算是个**列表**，做成整串宏（含 $ 与 \%，非纯数值）——
-    # 若拆成单个数值会与正文里到处出现的百分数撞值。
-    m("SurfBudgets", r"$10\%,25\%,50\%,75\%,100\%$")
+    # 响应面的预算档是**列表**，做成整串宏（含 $ 与 \%，非纯数值）——
+    # 若拆成单个数值会与正文里到处出现的百分数撞值。列表本身取自
+    # `SURF_BUDGETS`，与 `fig_surface()` 画的横轴同源。
+    m("SurfBudgets", "$" + ",".join("%g" % (100.0 * f) + r"\%"
+                                    for f in SURF_BUDGETS) + "$")
+    # 正文 §5.2"在 X% 预算处"那一档：从列表取，不手写（手写过一次 10）。
+    m("SurfFirstBudget", "%g" % (100.0 * SURF_BUDGETS[0]))
+    # 开发集实例数（§3.3/§5.4/§6/§7.4 的 $n=10$）：优先从实例表数据推导，
+    # 取不到再退回协议常量——`write_macros()` 永远不许抛异常。
+    _mk = (data.get("instances") or {}).get("brandimarte") or []
+    m("DevN", len(_mk) if _mk else DEV_N)
+    m("SeedRange", "%d--%d" % (SEED_LO, SEED_HI))
     # run 级样本量 = 开发集实例数 × seeds（正文 §3.4 那句 $n=300$）
-    m("RunN", 10 * SET_SEEDS)
+    m("RunN", (len(_mk) if _mk else DEV_N) * SET_SEEDS)
 
     # —— 算力放大 10× 的回报（§5"多算一点也没有回报"那句的量化）——
     # 源 `logs/anytime_g2000.json` 的 hist_hv 轨迹（G=1..2000），取 G=200 与 G=2000 两点。
@@ -1414,6 +1481,9 @@ def write_macros(data, allow_missing, write=True):
         except Exception:
             _tenx = None
     m("AnytimeTenXPct", p(_tenx, 2) if _tenx is not None else 0)
+    # 倍数本身（正文 §8.1"即 X× 算力"）：$G_\text{上限}/G$，不是一个独立观测，
+    # 手写一次就会与上面两个设置常量脱钩。
+    m("AnytimeTenX", SET_GMAX // SET_G)
 
     # —— T 动作空间穷举扫描（§5）：正文那句 "+0.31\%（p=0.78）" 原先是**盒口径** ——
     # 缺陷 39：该数字出自 `t_leverage_analysis.py`，它对**该文件里所有臂的前沿并集**

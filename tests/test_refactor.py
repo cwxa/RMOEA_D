@@ -2746,6 +2746,20 @@ class TestGateGainCriterion(unittest.TestCase):
             self.assertNotIn("> 1e-9", src,
                              "%s 里还留着「浮点非零」判据" % fn.__name__)
 
+    def test_named_eps_did_not_leak_into_the_gain_criterion(self):
+        """`NZ_EPS` 是给"筛可举例的最小非零值"用的，不许混进增益判据。
+
+        为什么需要这条：`hurink_gate` 里确实有一处**正当的**非零筛选
+        （表注要举"确实很小、却不显著"的反例），它必须写成一个具名常量，
+        否则会与判据长得一样、且上面那条 `assertNotIn("> 1e-9")` 只会被绕过。
+        所以在这里钉死：判据只认阈值 `GAIN_P`，不认任何 eps。
+        """
+        m = self._m()
+        src = inspect.getsource(m.is_gain)
+        self.assertIn("GAIN_P", src, "is_gain 没有引用显著性阈值 GAIN_P")
+        self.assertNotIn("NZ_EPS", src, "is_gain 混进了非零阈值 NZ_EPS（缺陷 29 复发）")
+        self.assertNotIn("1e-", src, "is_gain 里出现了浮点容差，判据会被削弱")
+
     def test_dev_confusion_matrix_is_perfect_under_the_fixed_criterion(self):
         """用仓库里现成的 logs 复核开发集：修正判据 -> tp=3, fp=0, fn=0, tn=7（判对率 1.00）。
 
@@ -3147,10 +3161,16 @@ class TestPaperNumbersHaveOneSource(unittest.TestCase):
 class TestPaperLayoutGuards(unittest.TestCase):
     """交付判据与两栏排版的回归锁（2026-09-19）。
 
-    实测事故：`tab_hurink`（66 行单栏）比 A4 文本区高 517 pt、`tab_instances`
-    高 97 pt。LaTeX 对这种情况只发 "Float too large for page" 警告，
-    **不产生 Overfull \\hbox**，然后把浮体强行排出纸张。而当时的交付判据
+    实测事故一（缺陷 38）：`tab_hurink`（66 行单栏）比 A4 文本区高 517 pt、
+    `tab_instances` 高 97 pt。LaTeX 对这种情况只发 "Float too large for page"
+    警告，**不产生 Overfull \\hbox**，然后把浮体强行排出纸张。而当时的交付判据
     只统计"超过 1000pt 的超宽"——三类告警里最危险的一类完全没被盯住。
+
+    实测事故二（缺陷 43）：把三类告警补齐后，判据仍是**空扫**——Tectonic 把
+    告警写在 stderr，而 `--keep-logs` 落下的 `main.log` 里 `Overfull` 出现
+    **0 次**（26304 字节实测），调用方却只把 `.log` 喂给 `scan_log`。
+    于是"缺字 0 / 超宽 0 / 浮体过大 0"是**恒真**的。
+    本类的最后一条锁专门守这个调用点（缺陷 18/29 都是"helper 写了、调用方没接"）。
     """
 
     @classmethod
@@ -3171,15 +3191,68 @@ class TestPaperLayoutGuards(unittest.TestCase):
         log = ("Missing character: There is no X in font Y!\n"
                "Overfull \\hbox (12.3pt too wide) in paragraph at lines 1--2\n"
                "LaTeX Warning: Float too large for page by 517.04124pt on input line 79.\n")
-        miss, over, flt = self.mod.scan_log(log)
+        miss, over, flt, big = self.mod.scan_log(log)
         self.assertEqual(len(miss), 1)
         self.assertEqual(len(over), 1)
         self.assertEqual(len(flt), 1,
                          "Float too large 必须被单独计数（它不同时产生 Overfull）")
+        self.assertEqual(len(big), 1, "12.3pt 远在可见阈值之上，必须计入拦截档")
 
     def test_scan_log_clean_log_returns_empty(self):
-        miss, over, flt = self.mod.scan_log("note: Running TeX ...\n[1] [2]\n")
-        self.assertEqual((len(miss), len(over), len(flt)), (0, 0, 0))
+        miss, over, flt, big = self.mod.scan_log("note: Running TeX ...\n[1] [2]\n")
+        self.assertEqual((len(miss), len(over), len(flt), len(big)), (0, 0, 0, 0))
+
+    def test_subthreshold_overfull_is_reported_but_not_blocking(self):
+        """亚毫米级超宽只报告、不拦交付。
+
+        本机 `main.tex` 实测有一处 `Overfull \\hbox (0.48438pt too wide)`
+        ——约 0.17 mm，纸面上看不出来。若把它也当交付失败，判据就会常年红灯，
+        最后被人习惯性忽略（"1000pt 阈值"的教训反过来：阈值要按**纸面可见性**定，
+        不能按"能不能抓到"定）。
+        """
+        log = "warning: main.tex:389: Overfull \\hbox (0.48438pt too wide) in paragraph\n"
+        miss, over, flt, big = self.mod.scan_log(log)
+        self.assertEqual(len(over), 1, "亚毫米超宽仍要出现在报告里")
+        self.assertEqual(len(big), 0,
+                         "%.1f pt 以下的超宽不该拦交付" % self.mod.OVER_TOL_PT)
+        self.assertEqual(self.mod.OVER_TOL_PT, 1.0)
+
+    def test_scan_log_dedups_when_both_sources_carry_the_same_warning(self):
+        """两路来源命中同一条告警时只算一次。
+
+        现在 stderr 与 `.log` 的内容是互补的（`.log` 一条都没有），但**不能依赖
+        这个巧合**：Tectonic 换版本后可能两处都写，届时计数翻倍会把"1 处超宽"
+        报成 2 处，报表上的数字就假了。
+        """
+        line = ("warning: main.tex:79: Overfull \\hbox (12.3pt too wide) in paragraph\n"
+                "LaTeX Warning: Float too large for page by 517.04124pt on input line 79.\n")
+        a = self.mod.scan_log(line,)
+        b = self.mod.scan_log(line, line)
+        self.assertEqual([len(x) for x in a], [len(x) for x in b],
+                         "同一告警喂两遍不该被算成两处")
+
+    def test_tectonic_warnings_live_on_stderr_so_both_streams_are_fed(self):
+        """调用点必须把 stderr 合并流喂给 `scan_log`——只喂 `.log` 等于空扫。
+
+        缺陷 43：Tectonic 以 `warning: ...` 形式把 TeX 告警写在 **stderr**，
+        `.log` 里一条都没有。所以这里用 AST 检查调用点，而不是只看 helper：
+        helper 写对了、调用方接错了线，是缺陷 18/29 的同款事故。
+        """
+        import ast
+        src = self._read("paper", "build.py")
+        tree = ast.parse(src)
+        calls = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == "scan_log"]
+        self.assertEqual(len(calls), 1,
+                         "build.py 里应恰好有一处 scan_log 调用点，实际 %d 处"
+                         % len(calls))
+        names = {a.id for a in calls[0].args if isinstance(a, ast.Name)}
+        self.assertIn("out", names,
+                      "scan_log 的实参里没有 `out`（stderr 合并流）——"
+                      "只喂 .log 会让三类判据恒为 0（缺陷 43）")
+        self.assertGreaterEqual(len(calls[0].args), 2,
+                                "应同时喂 stderr 合并流与 .log（双源去重）")
 
     def test_two_tall_tables_are_two_column(self):
         """两个"比整页还高"的表必须保持两栏排版。"""
@@ -3330,8 +3403,21 @@ class TestSettingConstantsAreMacroized(unittest.TestCase):
             self.assertNotIn(lit, self.tex,
                              "正文又出现字面设置常量 %s —— 应改用宏" % lit)
 
+    def test_no_bare_seed_or_dev_count_in_prose(self):
+        """`30 个 seed` 与 `$n=10$` 这类设置值也必须走宏。
+
+        它们比 `G=200` 更隐蔽：`30` / `10` 太小、太常见，两个数字扫描器
+        （`check_paper_literals.py` 的正/反向）都**有意跳过百位以下整数**以避开
+        假阳性，于是没有任何机械机制能发现它们回退到字面值。所以在这里补一条。
+        """
+        for lit in ("30 个 seed", "30 个种子", "30 seeds", "$n=10$", "$n=30$"):
+            self.assertNotIn(lit, self.tex,
+                             "正文出现字面 %r —— 应改用 \\SetSeeds / \\DevN" % lit)
+
     def test_prose_uses_the_setting_macros(self):
-        for name in ("SetRefLo", "SetNp", "SetG", "SetGMax", "SigLevel", "RunN"):
+        for name in ("SetRefLo", "SetNp", "SetG", "SetGMax", "SigLevel", "RunN",
+                     "SetSeeds", "DevN", "SeedRange", "SurfFirstBudget",
+                     "SurfBudgets", "AnytimeTenX"):
             self.assertIn(self.BS + name, self.tex,
                           "正文没有引用 \\%s" % name)
 
@@ -3340,7 +3426,9 @@ class TestSettingConstantsAreMacroized(unittest.TestCase):
             self.skipTest("paper/tables/macros.tex 不存在")
         exp = {"SetNp": "100", "SetG": "200", "SetGMax": "2000",
                "SetSeeds": "30", "SetRefLo": "1.02", "SigLevel": "0.05",
-               "RunN": "300"}
+               "RunN": "300", "DevN": "10", "SeedRange": "42--71",
+               "SurfFirstBudget": "10", "AnytimeTenX": "10",
+               "SurfBudgets": r"$10\%,25\%,50\%,75\%,100\%$"}
         for k, v in exp.items():
             self.assertEqual(self.macros.get(k), v,
                              "宏 \\%s 期望 %s，实际 %r —— 设置或导出器被改过"
@@ -3499,6 +3587,125 @@ class TestFigureOutputIsReproducible(unittest.TestCase):
         self.assertIsNotNone(m, "paper_export.py 里找不到 save_fig()")
         self.assertIn("CreationDate", m.group(0),
                       "save_fig 没有去掉 PDF 创建时间——重跑导出会伪造出满屏二进制 diff")
+
+
+class TestPaperTypography(unittest.TestCase):
+    """版式守卫：中文正文里的引号必须是中文引号，且配对健全。
+
+    形态：正文原先 274 个双引号**全是 ASCII 直引号**，只有 9 处是中文弯引号。
+    XeTeX + ctex 不会把 `"` 变成中文引号，它按原样排出一个直引号 ——
+    中文段落里出现西文直引号是明确的排印错误，而混用（少数弯、多数直）
+    比全用直号更糟：读者会以为两种引号有区别。
+    （成对源文件里的 `"` 无法按行交替配对——引号会跨行，因此转换必须按全局序；
+    这里锁的是结果：一、不许再有 ASCII 直引号；二、弯引号必须配平且嵌套合法。）
+    """
+
+    O, C = "\u201c", "\u201d"
+    BS = chr(92)
+    # 这些命令的参数是代码/标签，不是正文，里面出现弯引号一定是转换出了偏差
+    CODE_CMDS = ("texttt", "verb", "url", "label", "input", "includegraphics",
+                 "cite", "ref", "graphicspath", "documentclass")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        cls.files = [os.path.join(cls.root, "paper", "main.tex")]
+        tdir = os.path.join(cls.root, "paper", "tables")
+        if os.path.isdir(tdir):
+            cls.files += [os.path.join(tdir, f) for f in sorted(os.listdir(tdir))
+                          if f.endswith(".tex")]
+        cls.texts = {}
+        for p in cls.files:
+            if os.path.exists(p):
+                with io.open(p, encoding="utf-8") as fh:
+                    cls.texts[p] = fh.read()
+
+    def test_no_ascii_double_quotes(self):
+        for p, t in sorted(self.texts.items()):
+            self.assertNotIn('"', t,
+                             "%s 里有 ASCII 直引号——中文正文应改用“ ”（%d 处）"
+                             % (os.path.basename(p), t.count('"')))
+
+    def test_curly_quotes_are_balanced_and_nested(self):
+        for p, t in sorted(self.texts.items()):
+            self.assertEqual(t.count(self.O), t.count(self.C),
+                             "%s 的弯引号不配平（开 %d / 闭 %d）"
+                             % (os.path.basename(p), t.count(self.O), t.count(self.C)))
+            depth = 0
+            for ch in t:
+                if ch == self.O:
+                    depth += 1
+                elif ch == self.C:
+                    depth -= 1
+                    self.assertGreaterEqual(
+                        depth, 0, "%s 出现了无开引号对应的闭引号（嵌套非法）"
+                        % os.path.basename(p))
+
+    def test_quotes_never_land_in_code_arguments_or_math(self):
+        t = self.texts.get(os.path.join(self.root, "paper", "main.tex"))
+        if t is None:
+            self.skipTest("paper/main.tex 不存在")
+        for cmd in self.CODE_CMDS:
+            # `re.escape` 不可省：`\url` 里的 `\u` 会被正则当成 Unicode 转义，
+            # 直接抛 "incomplete escape \u"（实测）。
+            pat = re.escape(self.BS + cmd) + r"\*?\s*\{([^{}]*)\}"
+            for m in re.finditer(pat, t):
+                self.assertNotIn(self.O, m.group(1),
+                                 "\\%s 的参数里出现开引号：%s" % (cmd, m.group(1)[:50]))
+                self.assertNotIn(self.C, m.group(1),
+                                 "\\%s 的参数里出现闭引号：%s" % (cmd, m.group(1)[:50]))
+        for m in re.finditer(r"\$[^$]*\$", t):
+            self.assertNotIn(self.O, m.group(0), "数学模式里出现引号：%s" % m.group(0)[:50])
+            self.assertNotIn(self.C, m.group(0), "数学模式里出现引号：%s" % m.group(0)[:50])
+
+
+class TestTableCaptionsDeclareTheirContent(unittest.TestCase):
+    """生成表的标题必须自足，且不得留下**悬空区间**。
+
+    形态：`tab_hurink` 的标题原先写死 "（左右两栏续排，左栏 Hed01--，右栏续接）"
+    —— `--` 后面是空的，读者看不出左栏到哪儿为止；而 66 行的表被两栏切开后，
+    一个悬空的区间恰恰是最需要说明的那件事。同类的还有 `tab_gate` 标题里手写的
+    "-1.0%"：它与正文明的 `\\HKthr` 是同一个门限，两处写法必然漂移。
+    """
+
+    BS = chr(92)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        cls.path = os.path.join(cls.root, "paper", "tables", "tab_hurink.tex")
+        cls.tab = None
+        if os.path.exists(cls.path):
+            with io.open(cls.path, encoding="utf-8") as fh:
+                cls.tab = fh.read()
+
+    def test_hurink_caption_ranges_have_both_ends(self):
+        if self.tab is None:
+            self.skipTest("paper/tables/tab_hurink.tex 不存在（先跑 paper_export.py）")
+        m = re.search(r"左栏\s*(\S+?)--(\S+?)，右栏\s*(\S+?)--(\S+?)[）)]", self.tab)
+        self.assertIsNotNone(
+            m, "标题里的两栏区间缺失或格式改变——注意不能留悬空区间"
+               "（旧写法 “左栏 Hed01--” 就是缺右端）")
+        a, b, c, d = m.groups()
+        for name in (a, b, c, d):
+            self.assertRegex(name, r"^Hed\d+$", "区间端点 %r 不像实例名" % name)
+        # 端点必须真的在表体里出现（防止标题引用了不存在的实例）
+        body = self.tab.split(self.BS + "endhead", 1)[-1]
+        for name in (a, b, c, d):
+            self.assertIn(name, body, "标题提到的实例 %s 不在表体里" % name)
+        # 且左栏末位 < 右栏首位（两栏是**续排**，不是并列重复）
+        self.assertLess(int(b[3:]), int(c[3:]),
+                        "左栏终点 %s 不小于右栏起点 %s —— 两栏没有按顺序续排" % (b, c))
+
+    def test_gate_caption_uses_the_shared_threshold_macro(self):
+        p = os.path.join(self.root, "paper", "tables", "tab_gate.tex")
+        if not os.path.exists(p):
+            self.skipTest("paper/tables/tab_gate.tex 不存在")
+        with io.open(p, encoding="utf-8") as fh:
+            t = fh.read()
+        self.assertIn(self.BS + "HKthr", t,
+                      "tab_gate 标题没有引用共享门限宏 \\HKthr —— 自己格式化成 "
+                      "“-1%” 或 “-1.0%” 都会与正文漂移")
 
 
 if __name__ == "__main__":

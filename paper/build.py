@@ -39,22 +39,58 @@ def run(cmd, cwd=HERE, env=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def scan_log(log):
-    """从 LaTeX 日志里数出三类**交付级**告警。
+# 超宽的**可见**阈值（pt）。低于它的溢出是亚毫米级（1 pt ≈ 0.35 mm），
+# 纸面上看不出来，不该拦住交付；高于它才是真正的排印事故。
+OVER_TOL_PT = 1.0
+
+_OVER_RE = re.compile(r"Overfull \\hbox \(([-\d.]+)pt too wide\)")
+
+
+def scan_log(*streams):
+    """从编译输出（可给多路来源）里数出三类**交付级**告警。
 
     - `Missing character`：字体缺字，PDF 上直接少字。
-    - `Overfull \\hbox`：内容超出版心宽度。
+    - `Overfull \\hbox`：内容超出版心宽度。按 pt 分「总量」与「超阈值」两档。
     - `Float too large for page`：浮体（表/图）比整页还高。**这一类不会产生
       Overfull 告警**，LaTeX 只是警告后把浮体强行排出纸张——即内容跑到页面外。
       2026-09-19 实测 `tab_hurink`（66 行单栏）超出 517 pt、`tab_instances`
-      超出 97 pt，此前一直没被交付判据拦住（判据只认 "1000pt" 以上的超宽）。
-      现在把三类一并计数，交付判据 = 三者全为 0。
+      超出 97 pt。
+
+    为什么要收**多路**来源
+    ----------------------
+    Tectonic 把 TeX 的告警（`Overfull`/`Float too large`/`Missing character`）
+    以 `warning: ...` 的形式写在 **stderr**，而 `--keep-logs` 落下的 `main.log`
+    **一行都不含这些字符串**（2026-09-19 实测：`main.log` 26304 字节里
+    `Overfull` 出现 0 次，而 stderr 明确有 `Overfull \\hbox (0.48438pt too wide)`）。
+    此前只喂 `main.log` → 三类计数恒为 0，判据是**空扫**、永远通过。
+    这与缺陷 38 同族：判据本身写对了，但盯错了信号源。
+    所以现在把 `run()` 返回的合并流与 `.log` 一起喂进来，任一来源命中都算数。
+
+    交付判据 = `Missing character` 为 0 **且** `Float too large` 为 0
+    **且** 超 `OVER_TOL_PT` 的超宽为 0。亚毫米级超宽只报告不拦。
     """
+    log = "\n".join(streams)
     lines = log.split("\n")
     miss = [l for l in lines if "Missing character" in l]
     over = [l for l in lines if "Overfull \\hbox" in l]
     flt = [l for l in lines if "Float too large" in l]
-    return miss, over, flt
+
+    def _dedup(seq):
+        seen, out = set(), []
+        for x in seq:
+            k = x.strip()
+            if k not in seen:
+                seen.add(k)
+                out.append(x)
+        return out
+
+    miss, over, flt = _dedup(miss), _dedup(over), _dedup(flt)
+    big = []
+    for l in over:
+        m = _OVER_RE.search(l)
+        if m and abs(float(m.group(1))) > OVER_TOL_PT:
+            big.append(l)
+    return miss, over, flt, big
 
 
 def referenced(tex):
@@ -170,14 +206,24 @@ def main():
     if rc != 0 or not os.path.exists(pdf):
         print("\n[失败] 编译返回 %d" % rc)
         return rc
-    log = io.open(os.path.join(HERE, os.path.splitext(args.tex)[0] + ".log"),
-                  encoding="utf-8", errors="replace").read()
-    miss, over, flt = scan_log(log)
-    print("\n[OK] %s  %.1f KB  缺字 %d / 超宽 %d / 浮体过大 %d"
+    logpath = os.path.join(HERE, os.path.splitext(args.tex)[0] + ".log")
+    log = (io.open(logpath, encoding="utf-8", errors="replace").read()
+           if os.path.exists(logpath) else "")
+    # **两路都喂**：告警实际在 stderr（合并进了 `out`），`.log` 里一条都没有。
+    # 只喂 `.log` = 空扫，判据永远通过（缺陷 43）。
+    miss, over, flt, big = scan_log(out, log)
+    print("\n[OK] %s  %.1f KB  缺字 %d / 超宽 %d（其中超 %.1f pt 的 %d）/ 浮体过大 %d"
           % (os.path.basename(pdf), os.path.getsize(pdf) / 1024,
-             len(miss), len(over), len(flt)))
-    for l in (miss + over + flt)[:8]:
+             len(miss), len(over), OVER_TOL_PT, len(big), len(flt)))
+    for l in (miss + flt + big)[:8]:
         print("   ", l[:150])
+    if miss or flt or big:
+        print("\n[失败] 交付判据未通过：缺字 %d / 浮体过大 %d / 可见超宽(>%.1fpt) %d"
+              % (len(miss), len(flt), OVER_TOL_PT, len(big)))
+        return 3
+    if over:
+        print("   （提示：%d 处亚毫米级超宽，纸面不可见，按逾限阈值 %.1f pt 放行）"
+              % (len(over), OVER_TOL_PT))
     return 0
 
 
