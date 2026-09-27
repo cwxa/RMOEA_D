@@ -1,5 +1,13 @@
 # RMOEA/D Algorithm Implementation Plan
 
+> **⚠️ 历史存档（2026-09-27 补注）**：本文件是 **2026-05-05 的项目开工计划稿**，
+> 记录"当时打算怎么做"，**不是当前口径**。它其中若干约定已被后续工作推翻或收窄，例如：
+> 目标 HV **落盘到 `results.json`** —— 而 `results/` 现被明确标注为
+> **旧流水线 / 盒口径 / 修复前旧代码**，当前实验台落盘在 `logs/`；
+> 两处目录同一字段名 `final_hv` **含义相反**，不可混用。
+> 当前口径与偏离声明以 **`docs/optimization-report.md`（口径节 + 缺陷登记）** 与
+> **`docs/paper-implementation-conformance.md`** 为准。**请勿据本稿改代码或改口径。**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the RMOEA/D algorithm (MOEA/D + Q-learning parameter adaptation) for bi-objective fuzzy flexible job shop scheduling on Brandimarte instances Mk01-Mk10, outputting Pareto fronts and HV values to `results.json`.

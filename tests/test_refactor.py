@@ -4380,5 +4380,49 @@ class TestDocumentedCommandsAreExecutable(unittest.TestCase):
                          + (r.stdout or "") + (r.stderr or ""))
 
 
+class TestDocumentReferencesResolveAndReadWell(unittest.TestCase):
+    """文档不得①指向不存在的文件 ②在 markdown 里写 LaTeX 交叉引用 ③把 ε 说成"探索率"。
+
+    2026-09-27 第十五次复核（缺陷 56/58/59）——三面**都没人看**：
+
+    * **①** `docs/qpas-optimization-plan.md` §8「交付物」把 `docs/prereg-qpas-v2.md`
+      与 `logs/_inst_T_scan.json` 当**已交付**列出，两者**都不存在**；
+      而 `check_doc_commands.py` 只查命令旗标、两个口径锁只查数字标注 —— 谁都不报错。
+      这与缺陷 53 同族：**覆盖面由"判据恰好怎么写"决定，而不是由"哪些面需要检查"决定**。
+    * **②** markdown 里写了 `§\\ref{sec:deviation}` 与 `表~\\ref{tab:rl50}`（共 3 处）——
+      `\\ref{}` 在 markdown 里**不渲染**，读者看到的是字面文本、**没有编号**。
+      正确做法是写真实编号，且编号要**从 `paper/main.aux` 的 `\\newlabel` 读**（查得
+      `tab:rl50` → 表 9、`sec:deviation` → §5.5），不要靠数。
+    * **③** `readme.md` 参数表与 `doc.md` §三.5/§四把 ε 解释成"**探索率 / 随机动作概率**"，
+      而论文 Alg.3 第 5–8 行是 `if rand < ε then 取 max Q else 随机`
+      —— **ε 是"利用"的概率**。同一仓库里 `paper-vs-reproduction.md`「ε 推向最'利用'的一端」
+      与它**自相矛盾**（又一次"同一指标两处来源、两处相反"）。
+
+    判据实现见 `scripts/check_doc_refs.py`（带退出码 + `--self-test` 防空扫 +
+    可审计的"已声明豁免"：文档若写明 `logs/` 等目录不入库，其引用放行）。
+    配套变异：`scripts/mutation_check_caliber_claim.py` 的 **M8/M9**。
+    """
+
+    def _run(self, *args):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        return subprocess.run(
+            [sys.executable, os.path.join(root, "scripts", "check_doc_refs.py")]
+            + list(args), capture_output=True, text=True, timeout=300)
+
+    def test_no_broken_references_or_misread_epsilon(self):
+        r = self._run()
+        self.assertEqual(r.returncode, 0,
+                         "文档引用/表述复核未通过：\n" + (r.stdout or "")
+                         + (r.stderr or ""))
+
+    def test_the_checker_itself_is_not_vacuous(self):
+        """防空扫（缺陷 43 的教训）：喂已知坏例，三条判据必须都能报出；
+        并且"更正性表述"必须放行 —— 否则会把正确的勘误判成错误。"""
+        r = self._run("--self-test")
+        self.assertEqual(r.returncode, 0,
+                         "引用检查器对已知坏例没报错（恒为空扫）或误伤更正表述：\n"
+                         + (r.stdout or "") + (r.stderr or ""))
+
+
 if __name__ == "__main__":
     unittest.main()

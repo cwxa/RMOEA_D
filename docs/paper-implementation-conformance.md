@@ -183,7 +183,7 @@ python scripts/ls1_variant_check.py
 顺序偏离是“同一个多重集的排列”，而 LS1 偏离是**算子语义不同**——
 在别的实例族或别的算力预算下完全可能变成显著。
 因此本文**把它作为已声明的偏离写进复现说明**
-（`paper/main.tex` §\ref{sec:deviation}），而不是当作无害细节略过。
+（`paper/main.tex` **§5.5**，`\label{sec:deviation}`），而不是当作无害细节略过。
 
 ### 4.4 RVNS 其余部分（逐条）
 

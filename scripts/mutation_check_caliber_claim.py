@@ -43,6 +43,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS = os.path.join(ROOT, "tests", "test_refactor.py")
 LOCK = "TestDocsDoNotAssertRetractedCaliberClaims"
 BOX_LOCK = "TestBoxCaliberNumbersAreAnnotated"
+REF_LOCK = "TestDocumentReferencesResolveAndReadWell"
 
 
 # (名字, 相对路径, 正确的修订文本(锚点), 被撤回的旧断言, 预期捕获它的测试类)
@@ -92,6 +93,19 @@ MUTATIONS = [
      "   `+0.125%`、`p=0.058`（n.s.）——**那个 `\\*` 是口径造出来的**（缺陷 54）〕。\n",
      "   时\"RL 引导选算子\"相对\"随机选算子\"才显著（**+1.86%, p=0.045\\***）。\n",
      BOX_LOCK),
+    # ---- 缺陷 56/58：文档引用与表述（锁 TestDocumentReferencesResolveAndReadWell）----
+    # M8：把"§5.5"退回 markdown 里不渲染的 LaTeX 交叉引用 → 必须被抓。
+    ("M8 把 §5.5 退回 markdown 里的 `§\\ref{}`（不渲染）",
+     "docs/paper-implementation-conformance.md",
+     "（`paper/main.tex` **§5.5**，`\\label{sec:deviation}`），而不是当作无害细节略过。",
+     "（`paper/main.tex` §\\ref{sec:deviation}），而不是当作无害细节略过。",
+     REF_LOCK),
+    # M9：把 ε 的释义退回"探索率"（与论文 Alg.3 第 5–8 行相反）→ 必须被抓。
+    ("M9 readme 把 ε 退回'探索率'（极性说反）",
+     "readme.md",
+     "| Q-learning ε | 0.8 | 贪婪因子；**走\"取 max Q\"（利用）分支的概率**——ε 越大越**利用**，不是\"探索率\" |",
+     "| Q-learning ε | 0.8 | 探索率 |",
+     REF_LOCK),
 ]
 
 

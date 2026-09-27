@@ -1,5 +1,13 @@
 # RMOEA/D 算法复现设计文档
 
+> **⚠️ 历史存档（2026-09-27 补注）**：本文件是 **2026-05-05 的项目设计稿**，
+> 记录"当时的设计意图"，**不是当前口径**。凡与下列文档冲突，一律以它们为准：
+> **`docs/optimization-report.md`（HV 口径节 + 缺陷登记）**、
+> **`docs/paper-implementation-conformance.md`（实现 vs 原始 PDF 的逐条核对与两处已声明偏离）**、
+> **`docs/qpas-implementation-audit.md`（Q-PAS 逐条核对）**。
+> 尤其注意：早期设计里"HV 落盘 `results.json`""参考点动态调整/自行归一化"等写法，
+> 已被判定会**改变结论**（盒口径），**请勿据本稿改代码或改口径。**
+
 ## 项目目标
 
 复现论文《A reinforcement learning based RMOEA/D for bi-objective fuzzy flexible job shop scheduling》的核心算法框架（MOEA/D + Q-learning 参数自适应），针对 Brandimarte 模糊柔性作业车间实例（Mk01~Mk10）运行并输出 Pareto 前沿与 HV 指标。

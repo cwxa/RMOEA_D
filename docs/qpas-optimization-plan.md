@@ -201,7 +201,7 @@
 | **C3** | **效应量必报** | Elite archive +0.28% 是"显著但无实际意义"的样板（293/300, p=8.5e-50） | 只报 p 会误导；显著性 + 效应量两个都给 |
 | **C4** | **复现 / 改进分离** | 混跑会污染"复现"的结论 | 改进版一律另立标签，不写进论文复现表格 |
 | **C5** | **留出集** | Mk01–Mk10 全部被用过，等于没有确认集 | 定切分：**调参用 Mk01–Mk05，确认只用 Mk06–Mk10 的最终结果**。T 杠杆随规模增长，此切分是规模分层、不是 cherry-pick |
-| **C6** | **预注册** | 这个项目已经吃过"先跑后挑"的亏（EXT 指标 +13.3% 是差端恶化的假象，见 `paper-vs-reproduction` §2.6） | 新增 `docs/prereg-qpas-v2.md`：把 G1/G2 阈值、比较族、要报的指标**写在跑之前** |
+| **C6** | **预注册** | 这个项目已经吃过"先跑后挑"的亏（EXT 指标 +13.3% 是差端恶化的假象，见 `paper-vs-reproduction` §2.6） | **建议新增** `docs/prereg-qpas-v2.md`：把 G1/G2 阈值、比较族、要报的指标**写在跑之前** —— ⚠️ **未产出**（Gating 判负、Q-PAS 收尾后已无对象；见 §8 交付物表与 §10.5）。本项目的**预注册守卫**（`hurink_gate()`）对象是 `data/hurink/*.fjs` 实例名单，与此无关 |
 
 ---
 
@@ -238,17 +238,20 @@ P2/P5 相互独立，可与 P4 并行。
 
 ## 8. 交付物
 
-| 文件 | 内容 |
-|---|---|
-| `docs/qpas-optimization-plan.md` | 本文 |
-| `scripts/phase_oracle.py` | G1/G2 的实现（相位 oracle + 可观测性检验 + 置换 null） |
-| `logs/_mk10_traj.json` | 逐代 HV 轨迹（固定 T 各臂） |
-| `logs/_inst_T_scan.json` | B0 的 10 实例 T 扫参结果 |
-| `docs/prereg-qpas-v2.md` | 预注册（阈值/比较族/指标） |
-| `docs/ablation-qpas-rvns-diagnosis.md` | §7.4 oracle 误读更正；§7.1/§7.3 绝对值按冻结盒重算 |
-| `docs/paper-vs-reproduction.md` | §4「未来工作」两条更正（动作空间降级、oracle 条目删除） |
-| `src/rmoea_d/core/qlearning.py` | A1–A5（仅当 Gating 通过） |
-| `scripts/t_leverage_sweep.py` | 新增臂定义（B1 等算力臂 / B3 / B4） |
+> ⚠️ 本表**含未产出项**，逐条标注——原先它一律按"已交付"列，读者按图索骥会找不到文件
+> （2026-09-27 复核发现，缺陷 58）。凡未产出，一律在此写明**为什么**。
+
+| 文件 | 内容 | 状态 |
+|---|---|---|
+| `docs/qpas-optimization-plan.md` | 本文 | ✅ |
+| `scripts/phase_oracle.py` | G1/G2 的实现（相位 oracle + 可观测性检验 + 置换 null） | ✅ |
+| `logs/_mk10_traj.json` | 逐代 HV 轨迹（固定 T 各臂） | ✅ |
+| `logs/_inst_T_scan.json` | B0 的 10 实例 T 扫参结果 | ⚠️ **未产出**——B0 属 P2，P2 未执行（§10.5） |
+| `docs/prereg-qpas-v2.md` | 预注册（阈值/比较族/指标） | ⚠️ **未产出**——它是 §5 C6 的**改进建议**；Gating 判负、Q-PAS 收尾后已无对象。**注意**：本项目的**预注册守卫**（`hurink_gate()`）对象的实际载体是 `data/hurink/*.fjs` **实例名单**，与本文无关 |
+| `docs/ablation-qpas-rvns-diagnosis.md` | §7.4 oracle 误读更正；§7.1/§7.3 绝对值按冻结盒重算 | ✅ |
+| `docs/paper-vs-reproduction.md` | §4「未来工作」两条更正（动作空间降级、oracle 条目删除） | ✅ |
+| `src/rmoea_d/core/qlearning.py` | A1–A5（仅当 Gating 通过） | ✅（但 A1–A5 **未动**：Gating 判负） |
+| `scripts/t_leverage_sweep.py` | 新增臂定义（B1 等算力臂 / B3 / B4） | ✅ |
 
 ---
 
