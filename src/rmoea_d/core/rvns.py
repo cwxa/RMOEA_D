@@ -193,6 +193,68 @@ def ls5_insert_position(os_vec, ma_vec, instance, rng):
     return os_new, ma_new
 
 
+def ls1_last_op_min_time(os_vec, ma_vec, instance, rng):
+    """LS1（**论文原文**）：找到**最后完工的工序** $O_{i,\\Theta_i}$，把它移到
+    「加工时间最小」的另一台机器。
+
+    原文（ESWA 203 (2022) 117380, §4.6）：
+        ``LS1: Find the last finished operation O_{i,Θ_i}, move O_{i,Θ_i} to
+        another machine M' with minimum processing time.``
+
+    ⚠ **与 `ls1_swap_machine` 的区别（一条此前未记录的实现偏离）**
+
+    ================  ==========================  ================================
+    本实现原 LS1      随机选一道工序               换成候选集里**随机**一台机器
+    论文 LS1          **最后完工**的那道工序      移到**加工时间最小**的另一台机器
+    ================  ==========================  ================================
+
+    论文 LS1 的选择**完全由解决定、不消耗随机数**（"最后完工"与"最小加工时间"
+    都是确定性的），因此换用它也会改变后续轮盘赌/邻域选择的随机流 ——
+    这也是它必须作为独立臂实测、而不能靠"逐步对比"推断的原因。
+
+    本函数保留 `rng` 形参仅为与其它 LS 算子同签名；**内部不使用**。
+    """
+    if not os_vec:
+        return os_vec.copy(), ma_vec.copy()
+
+    n_jobs = instance["n_jobs"]
+    n_machines = instance["n_machines"]
+    crisp_times = instance["crisp_times"]
+
+    op_counter = [0] * n_jobs
+    job_ready = [0.0] * n_jobs
+    machine_ready = [0.0] * n_machines
+
+    last_pos, last_job, last_oi, last_finish = -1, -1, -1, -1.0
+    for pos, job_id in enumerate(os_vec):
+        oi = op_counter[job_id]
+        op_counter[job_id] = oi + 1
+        chosen_m = ma_vec[pos]
+        ptime = crisp_times[job_id][oi][chosen_m]
+        jr = job_ready[job_id]
+        mr = machine_ready[chosen_m]
+        start = jr if jr > mr else mr
+        finish = start + ptime
+        job_ready[job_id] = finish
+        machine_ready[chosen_m] = finish
+        if finish > last_finish:
+            last_finish, last_pos, last_job, last_oi = finish, pos, job_id, oi
+
+    if last_pos < 0:
+        return os_vec.copy(), ma_vec.copy()
+
+    current_m = ma_vec[last_pos]
+    best_m, best_t2 = None, float("inf")
+    for m, _a, b, _c in instance["jobs"][last_job][last_oi]:
+        if m != current_m and b < best_t2:
+            best_t2, best_m = b, m
+
+    ma_new = ma_vec.copy()
+    if best_m is not None:
+        ma_new[last_pos] = best_m
+    return os_vec.copy(), ma_new
+
+
 # 局部搜索算子注册表
 LOCAL_SEARCH_OPERATORS = [
     ls1_swap_machine,
@@ -201,6 +263,22 @@ LOCAL_SEARCH_OPERATORS = [
     ls4_swap_positions,
     ls5_insert_position,
 ]
+
+# 「论文 LS1」版注册表：把第 0 个算子换成论文原文的 LS1
+# （最后完工工序 → 最小加工时间机器）。其余四个完全不变。
+# 存在的意义是**判定这条偏离有没有影响**，见
+# `docs/paper-implementation-conformance.md`。
+LOCAL_SEARCH_OPERATORS_PAPER = [
+    ls1_last_op_min_time,
+    ls2_min_time_machine,
+    ls3_max_workload_machine,
+    ls4_swap_positions,
+    ls5_insert_position,
+]
+LS_VARIANT_TABLES = {
+    "impl": LOCAL_SEARCH_OPERATORS,
+    "paper": LOCAL_SEARCH_OPERATORS_PAPER,
+}
 
 # 该算子是否会「打乱 OS 顺序」从而让已有机器值失效？
 #
@@ -224,7 +302,8 @@ class RVNS:
     """
 
     def __init__(self, n_operators=5, lp=40, ls_trials=1, mode="rl",
-                 budget_mode="fixed", budget_pool=None, budget_target_mean=None):
+                 budget_mode="fixed", budget_pool=None, budget_target_mean=None,
+                 ls_table="impl"):
         """
         Initialize RVNS.
 
@@ -237,6 +316,10 @@ class RVNS:
                   Section 4.6 提到的用法 (1)——五个算子等概率随机选，
                   即论文变体阶梯里的 RMOEA/D3「randomly selection VNS」。
                   用于把「RL 引导选择」的净贡献「加上局部搜索本身」里剥离出来。
+            ls_table: 算子表的版本。``"impl"``（默认）用 `LOCAL_SEARCH_OPERATORS`；
+                  ``"paper"`` 用 `LOCAL_SEARCH_OPERATORS_PAPER`（第 0 个算子换成
+                  论文原文的 LS1：最后完工工序 → 最小加工时间机器）。
+                  **默认不变**，只是为了让审计能实测这条偏离。
             budget_mode: 邻域尝试次数在种群内的**分配**方式（ABA，见下）。
             budget_pool: 允许的尝试次数档位，默认 ``[1, 3]``（最小档/最大档）。
             budget_target_mean: 每代每解**平均**预算上限。给定时，
@@ -275,6 +358,11 @@ class RVNS:
         self.lp = lp
         self.ls_trials = max(1, int(ls_trials))
         self.mode = mode
+        if ls_table not in LS_VARIANT_TABLES:
+            raise ValueError("unknown ls_table: %r (可选: %s)"
+                             % (ls_table, sorted(LS_VARIANT_TABLES)))
+        self.ls_table = ls_table
+        self.operators = list(LS_VARIANT_TABLES[ls_table])
         # 成功记忆和失败记忆：每个元素是长度为n_operators的列表
         self.success_memory = []  # SM
         self.failure_memory = []  # FM
@@ -348,7 +436,7 @@ class RVNS:
 
         for t_i in range(n_trials):
             op_idx = self.select_operator(rng)
-            ls_func = LOCAL_SEARCH_OPERATORS[op_idx]
+            ls_func = self.operators[op_idx]
 
             # Generate neighbor
             new_os, new_ma = ls_func(os_vec, ma_vec, instance, rng)

@@ -1,0 +1,17 @@
+\begin{table}[htbp]
+  \centering
+  \caption{RL 选算子效应在 $n{=}\RlFiftyN$ 个 seed 下的复验（两臂仅“谁选算子”不同，各档算力由构造保证相等）}
+  \label{tab:rl50}
+  \small
+  \begin{tabular}{llrrrr}
+    \toprule
+    实例 & 算力档 & $\Delta$HV(\%) & 胜出 & $d_z$ & $p$ \\
+    \midrule
+    Mk09 & t1 · 每解 1.00 次求值 & +0.015 & 22/50 & +0.04 & $0.688$ \\
+    Mk09 & t3 · 每解 2.92 次求值 & +0.026 & 23/50 & +0.06 & $0.954$ \\
+    Mk10 & t1 · 每解 1.00 次求值 & −0.007 & 23/50 & −0.02 & $0.592$ \\
+    Mk10 & t3 · 每解 2.89 次求值 & +0.150 & 35/50 & +0.42 & $5.2\times 10^{-3}{}^{**}$ \\
+    \bottomrule
+  \end{tabular}
+  \par\vspace{3pt}\footnotesize\begin{minipage}{\linewidth}对每个实例与算力档，同 seed 配对比较“RL 选算子”与“随机选算子”（两臂 $ls\_trials$ 与 $G$ 相同，等算力由构造保证）。显著且为正的有 1 组，显著且为负的 0 组。$\Delta$HV 为实例边界口径的相对增幅（比值之比）；绝对 HV 不跨实例可比。\end{minipage}
+\end{table}

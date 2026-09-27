@@ -1644,6 +1644,46 @@ class TestInitVariants(unittest.TestCase):
         self.assertEqual([init_random(inst, rng_a) for _ in range(12)],
                          init_by_variant(inst, 12, rng_b, "random"))
 
+    def test_mix3_paper_variant_follows_algorithm2_order(self):
+        """`init_variant="mix3_paper"` 必须严格按论文 Algorithm 2 的顺序拼三段。
+
+        论文第 1–4 行：`Parent = [P1(GW), P2(LS), P3(Random)]`，余数由 Random 补
+        （第 8 行）。本实现的 `init_mix3` 用的是相反的 `[Random, LS, GW]`，
+        这是**审计发现的一条真实偏离**；`mix3_paper` 就是用来量化它的。
+        把顺序钉住，否则"顺序无影响"这个结论会在实现漂移后失效。
+
+        ⚠️ 与 `mix3` 一样，这里**必须**复刻 rng 消耗顺序（GW → LS → Random），
+        不能只比多重集：三段消耗的随机数个数不同。
+        """
+        from rmoea_d.core.operators import (init_by_variant, init_gw, init_ls,
+                                            init_random)
+        for inst_name in ("Mk01", "Mk10"):
+            inst = load_instance(inst_name, "data", 42)
+            for n in (10, 30, 50, 99, 100, 101, 200):
+                base, rest = n // 3, n - 3 * (n // 3)
+                rng_m = np.random.RandomState(7)
+                manual = ([init_gw(inst, rng_m) for _ in range(base)]
+                          + [init_ls(inst, rng_m) for _ in range(base)]
+                          + [init_random(inst, rng_m) for _ in range(base)]
+                          + [init_random(inst, rng_m) for _ in range(rest)])
+                self.assertEqual(
+                    manual,
+                    init_by_variant(inst, n, np.random.RandomState(7), "mix3_paper"),
+                    "mix3_paper 的三段顺序不再是 Alg.2 的 [GW, LS, Random]"
+                    " (%s n_pop=%d)" % (inst_name, n))
+
+    def test_mix3_paper_is_not_bit_identical_to_mix3(self):
+        """顺序偏离是真的：`mix3_paper` 与 `mix3` **不应**逐位相同。
+
+        如果哪天两者变得逐位相同，说明顺序改动被无声抹掉了——那时
+        "拼接顺序无影响"就不是实验结论，而是实现根本没实现。
+        """
+        from rmoea_d.core.operators import init_by_variant
+        inst = load_instance("Mk10", "data", 42)
+        self.assertNotEqual(
+            init_by_variant(inst, 100, np.random.RandomState(7), "mix3"),
+            init_by_variant(inst, 100, np.random.RandomState(7), "mix3_paper"))
+
     def test_unknown_variant_raises(self):
         from rmoea_d.core.operators import init_by_variant
         inst = load_instance("Mk01", "data", 42)
@@ -4107,6 +4147,108 @@ class TestTableNotesDoNotHardcodeSettings(unittest.TestCase):
                          "表注/表头里写死了设置参数（应改为宏引用）：%s" % bad)
 
 
+def documentation_files():
+    """**全部**需要做"口径/数字"检查的文档：`docs/**/*.md`（递归）+ 仓库根级 `*.md`。
+
+    单一来源：`TestDocsDoNotAssertRetractedCaliberClaims`（缺陷 25/39/51/53）与
+    `TestBoxCaliberNumbersAreAnnotated`（缺陷 54）**必须**用同一份覆盖面 ——
+    同一族判据各写一套 glob，就是"覆盖面由实现细节决定"（缺陷 53 的病根）。
+
+    ⚠ 不含 `.workbuddy/memory/**`：那是**只追加**的工作日志，记录的是"当时的认识"，
+    不是交付文档；要求它事后带口径标记等于篡改历史。
+    """
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    out = []
+    for dirpath, _dirs, names in os.walk(os.path.join(root, "docs")):
+        for n in names:
+            if n.endswith(".md"):
+                out.append(os.path.join(dirpath, n))
+    for n in os.listdir(root):
+        p = os.path.join(root, n)
+        if n.endswith(".md") and os.path.isfile(p):
+            out.append(p)
+    return sorted({os.path.normpath(p) for p in out})
+
+
+def _rel(path):
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return os.path.relpath(path, root).replace(os.sep, "/")
+
+
+class TestBoxCaliberNumbersAreAnnotated(unittest.TestCase):
+    """**盒口径**数字不得脱离口径声明单独出现（缺陷 54 的"修复面不全"保险）。
+
+    背景
+    ----
+    `+1.86%`（`ΔHV=+0.01658`、`p=0.0449*`）是 `RVNSonly_t3 vs RandVNS_t3` 的
+    **盒口径**读数（28 臂 / 840 runs）；按论文唯一的**实例边界口径**（读落盘
+    `final_hv`）重算同一对照只有 **`+0.125%`、`p=0.058`（n.s.）** —— 盒口径把它
+    **放大 15～18 倍**，而且 **`p` 也从 `0.0497` 变成 `0.0606`**：
+    **那个 `*` 是口径造出来的**（缺陷 25 的又一例）。
+
+    2026-09-27 的复核（缺陷 54）发现它被 **5+ 份文档**当作"**唯一**有统计支撑的
+    RL 效应"引用，**没有一处写出口径**。而这一轮最初只改了 3 份
+    （`qpas-optimization-plan.md` / `readme.md` / `optimization-report.md`），
+    `paper-vs-reproduction.md`、`ablation-qpas-rvns-diagnosis.md`、
+    `aba-budget-allocation.md`、`qpas-implementation-audit.md` 里还散着裸引用 ——
+    正是缺陷 40 / 53 的**同族病**（"修复面不全" / "判据没盯着会出问题的那一面"）。
+
+    判据
+    ----
+    凡文档里出现这一对盒口径数字中的任一个，其**上下各 2 行**的窗口内必须出现
+    口径标记（盒口径 / 盒归一 / 实例边界 / 口径 / 勘误 / 更正 / 撤回 / 曾写 / 是错的）。
+    按**数字本身**（语义族）识别，不按上一次出现时的句式 —— 这正是缺陷 51 的教训。
+
+    配套变异测试：`scripts/mutation_check_caliber_claim.py` 的 **M6/M7**。
+    """
+
+    # 这一对数字是缺陷 54 的"指纹"：`1.86%` 只可能是那个对照的盒口径读数
+    # （`G^-1.86` 之类的指数写法不跟 `%`，不会被误伤）。
+    NUM = re.compile(r"1\.86\s*%|0\.01658")
+    MARK = re.compile(r"盒口径|盒归一|实例边界|口径|勘误|更正|撤回|曾写|原先写|是错的")
+    WINDOW = 2
+
+    def _hits(self):
+        """返回 (文件相对路径, 行号, 该行, 窗口文本) 列表。"""
+        out = []
+        for path in documentation_files():
+            with io.open(path, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+            for i, line in enumerate(lines):
+                if not self.NUM.search(line):
+                    continue
+                lo, hi = max(0, i - self.WINDOW), min(len(lines), i + self.WINDOW + 1)
+                out.append((_rel(path), i + 1, line, "\n".join(lines[lo:hi])))
+        return out
+
+    def test_each_box_caliber_number_carries_a_caliber_mark(self):
+        bad = [(name, ln, line.strip()[:90])
+               for name, ln, line, win in self._hits()
+               if not self.MARK.search(win)]
+        # 注意：消息里含字面 `%`（"1.86%"），**不能**用 `%` 格式化（会当成格式符）
+        msg = ("以下文档里的 `+1.86%` / `ΔHV=+0.01658` 是**盒口径**数字，却没有在上下两行内"
+               "声明口径（缺陷 54）。正确做法：紧邻处标注〔盒口径〕，并给出**实例边界口径**"
+               "的同对照读数（`+0.125%`、`p=0.058` n.s.）。命中：") + str(bad)
+        self.assertEqual([], bad, msg)
+
+    def test_the_guard_is_not_vacuous(self):
+        """防空扫（缺陷 43 的教训）：判据必须真的扫到内容，且**能区分**标注与否。
+
+        两道保险：① 全库确实扫到若干处这类数字（若被清空，判据就成了空转）；
+        ② 喂一条**裸引用**，`MARK` 必须不匹配；同一条加上〔盒口径〕后必须匹配。
+        """
+        hits = self._hits()
+        self.assertGreaterEqual(
+            len(hits), 8,
+            "全库只扫到 %d 处盒口径数字——判据疑似空扫或覆盖面退化" % len(hits))
+
+        bare = "| RL 引导选算子 vs 随机选算子（`ls_trials=3`） | **+1.86%** | **0.045 \\* ** |"
+        marked = "| RL 引导选算子 vs 随机选算子（`ls_trials=3`） | **+1.86%**〔盒口径〕 | **0.045 \\* ** |"
+        self.assertTrue(self.NUM.search(bare), "判据认不出裸引用，恒为空扫")
+        self.assertIsNone(self.MARK.search(bare), "裸引用被误判为已标注")
+        self.assertIsNotNone(self.MARK.search(marked), "加了标注仍不通过——判据不可用")
+
+
 class TestDocsDoNotAssertRetractedCaliberClaims(unittest.TestCase):
     """文档不得再**断言**"p / wins / dz 不受口径影响"（缺陷 25/39 已撤回该论断）。
 
@@ -4148,18 +4290,12 @@ class TestDocsDoNotAssertRetractedCaliberClaims(unittest.TestCase):
         覆盖面由"glob 恰好展开成什么"决定，而不是由"哪些文档需要检查"决定。
         与缺陷 43 / 51 同族 —— 检查器看着在工作，只是没盯着会出问题的那一面。
         现在覆盖面 = 文档全集，并由 `test_scan_covers_every_document` 钉住。
+
+        ⚠️ **2026-09-27（缺陷 54）**：定义已提到模块级 `documentation_files()`，
+        与 `TestBoxCaliberNumbersAreAnnotated` **共用同一份覆盖面** ——
+        同一族判据不得各写一套 glob（否则又是"覆盖面由实现细节决定"）。
         """
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        out = []
-        for dirpath, _dirs, names in os.walk(os.path.join(root, "docs")):
-            for n in names:
-                if n.endswith(".md"):
-                    out.append(os.path.join(dirpath, n))
-        for n in os.listdir(root):
-            p = os.path.join(root, n)
-            if n.endswith(".md") and os.path.isfile(p):
-                out.append(p)
-        return sorted({os.path.normpath(p) for p in out})
+        return documentation_files()
 
     def test_scan_covers_every_document(self):
         """防空扫 + 防静默豁免：文档全集必须都在扫描范围内（缺陷 53）。"""

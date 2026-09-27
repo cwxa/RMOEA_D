@@ -64,6 +64,7 @@ class RMOEAD:
         rvns_budget_pool=None,
         rvns_budget_target_mean=None,
         rvns_mode="rl",
+        rvns_ls_table="impl",
         enable_mix3=True,
         init_variant="mix3",
         enable_elite=True,
@@ -94,6 +95,10 @@ class RMOEAD:
             rvns_ls_trials: RVNS 每个解每代最多尝试的邻域次数 (论文为 1)
             rvns_mode: "rl" 按 SM/FM 轮盘赌选算子；"random" 五算子等概率随机选
                        （论文 Section 4.6 用法 (1)，即 RMOEA/D3 的随机 VNS）
+            rvns_ls_table: 算子表版本。"impl"（默认）保持历史行为；
+                       "paper" 把第 0 个算子换成论文原文的 LS1
+                       （最后完工工序 → 最小加工时间机器）。**仅为审计实测而设**，
+                       默认未改；见 docs/paper-implementation-conformance.md。
             rvns_budget_mode: 邻域尝试次数在种群内的**分配方式**（ABA）。
                        "fixed"（默认，论文口径）所有解统一用 rvns_ls_trials 次上限；
                        "pool_random" 每代总预算固定、随机决定升级哪些解（异质性对照）；
@@ -147,12 +152,14 @@ class RMOEAD:
         self.rvns_lp = rvns_lp
         self.rvns_ls_trials = rvns_ls_trials
         self.rvns_mode = rvns_mode
+        self.rvns_ls_table = rvns_ls_table
         # ABA：邻域搜索预算的分配方式（"fixed" 即论文口径，其余见 core/rvns.py）
         self.rvns_budget_mode = rvns_budget_mode
         self.rvns_budget_pool = rvns_budget_pool
         self.rvns_budget_target_mean = rvns_budget_target_mean
         self.rvns = (RVNS(n_operators=5, lp=rvns_lp, ls_trials=rvns_ls_trials,
                           mode=rvns_mode,
+                          ls_table=rvns_ls_table,
                           budget_mode=rvns_budget_mode,
                           budget_pool=rvns_budget_pool,
                           budget_target_mean=rvns_budget_target_mean)
@@ -488,6 +495,7 @@ class RMOEAD:
                 "qpas": self.fixed_T is None,
                 "rvns": self.enable_rvns,
                 "rvns_mode": self.rvns_mode if self.enable_rvns else None,
+                "rvns_ls_table": self.rvns_ls_table if self.enable_rvns else None,
                 "rvns_budget_mode": (self.rvns_budget_mode
                                      if self.enable_rvns else None),
                 "elite": self.enable_elite,

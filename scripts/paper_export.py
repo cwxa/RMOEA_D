@@ -918,22 +918,72 @@ def tab_probe_seeds(data, allow_missing):
 def tab_rl50(data, allow_missing):
     p = os.path.join(ROOT, "logs", "rl50.json")
     if not os.path.exists(p):
-        print("  [!] 缺 logs/rl50.json -> 跳过 RL n=50 表")
+        print("  [!] 缺 logs/rl50.json -> 写占位表（显式标注未就绪，绝不留旧数字）")
+        # 同 `hurink_gate` 的做法：占位表让主文件始终可编译，且 `\label{tab:rl50}`
+        # 始终存在——否则正文那句 `\ref` 会变成悬空引用、PDF 里出现 `??`。
+        write_tex("tab_rl50.tex", table_wrap(
+            "RL 选算子效应在更大 seed 数下的复验",
+            "tab:rl50",
+            "    \\multicolumn{3}{l}{\\textbf{复验数据尚未生成}}\\\\",
+            "lll",
+            notes=r"本表为占位：\texttt{logs/rl50.json} 未就绪。"
+                  r"生成后由 \texttt{scripts/paper\_export.py} 覆盖。"))
         return None
     d = load_json(p)
     body = []
-    for r in d["rows"]:
+    for r in sorted(d["rows"], key=lambda x: (str(x["instance"]), str(x["budget"]))):
         body.append("    %s & %s & %s & %d/%d & %s & %s \\\\"
-                    % (r["instance"], r["budget"], num(r["rel_pct"]), r["wins"], r["n"],
+                    % (r["instance"], r.get("budget_label", r["budget"]),
+                       num(r["rel_pct"]), r["wins"], r["n"],
                        num(r["dz"], 2), ptex(r["p"])))
     write_tex("tab_rl50.tex", table_wrap(
-        "RL 选算子效应在 $n=50$ seeds 下的复验（RMOEAD vs.\\ D5，等算力两档）",
+        "RL 选算子效应在 $n{=}\\RlFiftyN$ 个 seed 下的复验"
+        "（两臂仅“谁选算子”不同，各档算力由构造保证相等）",
         "tab:rl50",
         "    实例 & 算力档 & $\\Delta$HV(\\%) & 胜出 & $d_z$ & $p$ \\\\\n"
         "    \\midrule\n" + "\n".join(body), "llrrrr",
         notes=d.get("note", "")))
     data["rl50"] = d
     return d
+
+
+# ───────────────────── 7b. MIX3 拼接顺序偏离的判定 ─────────────────────
+def mix3_order(data, allow_missing):
+    """`logs/mix3_order.json`（`scripts/mix3_order_check.py` 产出）→ `data["mix3_order"]`。
+
+    审计发现本实现的 `init_mix3` 三段拼接顺序是 `[Random, LS, GW]`，
+    论文 Algorithm 2 是 `[P1=GW, P2=LS, P3=Random]`。这条偏离**有没有影响**
+    由 `init_variant="mix3_paper"` 实测判定，正文引用的数字全部由本文件生成。
+    """
+    p = os.path.join(ROOT, "logs", "mix3_order.json")
+    if not os.path.exists(p):
+        print("  [!] 缺 logs/mix3_order.json -> MIX3 顺序偏离的正文数字退化为占位")
+        if not allow_missing:
+            print("      （用 --allow-missing 可跳过；或先跑 "
+                  "scripts/mix3_order_check.py）")
+        return None
+    data["mix3_order"] = load_json(p)
+    return data["mix3_order"]
+
+
+# ────────────────── 7c. LS1 算子语义偏离的判定 ──────────────────
+def ls1_variant(data, allow_missing):
+    """`logs/ls1_variant.json`（`scripts/ls1_variant_check.py` 产出）→
+    `data["ls1_variant"]`。
+
+    审计发现本实现的 LS1 是「随机工序 → 随机候选机器」，论文 §4.6 是
+    「最后完工工序 → 最小加工时间机器」（确定性）。LS1 由轮盘赌选出，
+    因此这条偏离**会改变搜索邻域**——比 MIX3 拼接顺序实质得多。
+    """
+    p = os.path.join(ROOT, "logs", "ls1_variant.json")
+    if not os.path.exists(p):
+        print("  [!] 缺 logs/ls1_variant.json -> LS1 偏离的正文数字退化为占位")
+        if not allow_missing:
+            print("      （用 --allow-missing 可跳过；或先跑 "
+                  "scripts/ls1_variant_check.py）")
+        return None
+    data["ls1_variant"] = load_json(p)
+    return data["ls1_variant"]
 
 
 # ────────────────────────────── 8. 阶梯图 ──────────────────────────────
@@ -1535,6 +1585,98 @@ def write_macros(data, allow_missing, write=True):
     # run 级样本量 = 开发集实例数 × seeds（正文 §3.4 那句 $n=300$）
     m("RunN", (len(_mk) if _mk else DEV_N) * SET_SEEDS)
 
+    # —— RL 选算子效应的 n=50 独立复验（表~\ref{tab:rl50} 与 §讨论引用）——
+    # 数据源 `logs/rl50.json`（`scripts/rl50_analyze.py` 产出）。缺数据时**写占位**，
+    # 正文据 `\RlFiftyReady=0` 显式标注未就绪（同 \HKready 的做法），绝不沿用旧数字。
+    _rl = data.get("rl50")
+    if not _rl:
+        for _n, _v in (("RlFiftyReady", 0), ("RlFiftyN", 0), ("RlFiftyTiers", 0),
+                       ("RlFiftyRows", 0), ("RlFiftyRelMax", 0), ("RlFiftySigPos", 0)):
+            m(_n, _v)
+        m("RlFiftyVerdict", "\\textbf{（复验数据尚未生成。）}")
+    else:
+        _s = _rl.get("summary") or {}
+        _ns = _s.get("n_seeds", 0)
+        if isinstance(_ns, (list, tuple)):
+            _ns = max(_ns) if _ns else 0
+        m("RlFiftyReady", 1)
+        m("RlFiftyN", _ns)
+        m("RlFiftyTiers", _s.get("n_tiers", 0))
+        m("RlFiftyRows", _s.get("n_rows", 0))
+        # 相对差取绝对值：正文说的是"最大偏离有多大"，不该带符号
+        m("RlFiftyRelMax", num(abs(float(_s.get("rel_abs_max", 0.0))), signed=False))
+        m("RlFiftySigPos", _s.get("sig_pos", 0))
+        # 判定句**由数据生成**（同 \HKverdict 的做法）：哪些格子显著、最大相对差多少，
+        # 换一批数据就换一句话，正文不可能出现"写死但已过期"的结论。
+        _sig = [r for r in (_rl.get("rows") or [])
+                if r.get("p") == r.get("p") and r["p"] < GAIN_P and r["rel_pct"] > 0]
+        if not _sig:
+            _v = ("\\RlFiftyRows 组对比中\\textbf{没有一组达到显著}，"
+                  "最大相对差仅 $\\RlFiftyRelMax\\%$")
+        else:
+            _w = max(_sig, key=lambda r: r["rel_pct"])
+            # `ptex()` 自带数学模式（`$...$`），此处不要再包一层 `$`。
+            _v = ("\\RlFiftyRows 组对比中，只有 %d 组达到显著"
+                  "（%s/$%s$，相对差 %s\\%%，p=%s）——其余各组均与 0 不可区分"
+                  % (len(_sig), _w.get("instance", "?"), _w.get("budget", "?"),
+                     num(_w["rel_pct"]), ptex(_w["p"])))
+        m("RlFiftyVerdict", _v)
+
+    # —— MIX3 三段拼接顺序偏离的判定（§实验设置"复现环境"引用）——
+    # 数据源 `logs/mix3_order.json`（`scripts/mix3_order_check.py` 产出）。
+    # 无数据时写占位：数字一个都不许沿用旧的。
+    _mo = data.get("mix3_order")
+    if not _mo:
+        for _n, _v in (("MixOrderReady", 0), ("MixOrderN", 0), ("MixOrderRelMax", 0),
+                       ("MixOrderSig", 0)):
+            m(_n, _v)
+        m("MixOrderVerdict", "\\textbf{（顺序偏离的判定数据尚未生成。）}")
+    else:
+        _ms = _mo.get("summary") or {}
+        m("MixOrderReady", 1)
+        m("MixOrderN", _ms.get("n_instances", 0))
+        m("MixOrderRelMax", num(abs(float(_ms.get("rel_abs_max", 0.0))), signed=False))
+        m("MixOrderSig", _ms.get("n_sig", 0))
+        # 判定句由数据生成：几个实例显著、方向如何。换数据就换句子。
+        # ⚠ 只能用 % 拼接**不含字面 %** 的片段：`\%` 里的 % 会被当成格式符
+        #   （`\%` 必须写成 `%%`），这里改用 join 以免踩坑。
+        _pct = "（幅度最大 $" + "\\MixOrderRelMax" + "\\%$）"
+        if _ms.get("n_sig", 0) == 0 and _ms.get("same_sign"):
+            _dirw = "更差" if _ms.get("sign", 0) < 0 else "更好"
+            _v = ("\\MixOrderN 个实例上逐个都不显著" + _pct
+                  + "，且方向一致地说明论文顺序\\textbf{" + _dirw + "}")
+        elif _ms.get("n_sig", 0) == 0:
+            _v = "\\MixOrderN 个实例上逐个都不显著" + _pct + "，方向不一致"
+        else:
+            _v = ("\\MixOrderN 个实例中有 \\MixOrderSig\\ 个显著" + _pct
+                  + "——该顺序偏离不可忽略")
+        m("MixOrderVerdict", _v)
+
+    # —— LS1 算子语义偏离的判定（§实验设置"与复现对象的差异"引用）——
+    _lv = data.get("ls1_variant")
+    if not _lv:
+        for _n, _v in (("LsOneVarReady", 0), ("LsOneVarN", 0), ("LsOneVarRelMax", 0),
+                       ("LsOneVarSig", 0)):
+            m(_n, _v)
+        m("LsOneVarVerdict", "\\textbf{（LS1 偏离的判定数据尚未生成。）}")
+    else:
+        _ls = _lv.get("summary") or {}
+        m("LsOneVarReady", 1)
+        m("LsOneVarN", _ls.get("n_instances", 0))
+        m("LsOneVarRelMax", num(abs(float(_ls.get("rel_abs_max", 0.0))), signed=False))
+        m("LsOneVarSig", _ls.get("n_sig", 0))
+        _pct = "（幅度最大 $" + "\\LsOneVarRelMax" + "\\%$）"
+        if _ls.get("n_sig", 0) == 0 and _ls.get("same_sign"):
+            _dirw = "更差" if _ls.get("sign", 0) < 0 else "更好"
+            _v = ("\\LsOneVarN 个实例上逐个都不显著" + _pct
+                  + "，且方向一致地说明论文 LS1\\textbf{" + _dirw + "}")
+        elif _ls.get("n_sig", 0) == 0:
+            _v = "\\LsOneVarN 个实例上逐个都不显著" + _pct + "，方向不一致"
+        else:
+            _v = ("\\LsOneVarN 个实例中有 \\LsOneVarSig\\ 个显著" + _pct
+                  + "——该算子偏离不可忽略")
+        m("LsOneVarVerdict", _v)
+
     # —— 算力放大 10× 的回报（§5"多算一点也没有回报"那句的量化）——
     # 源 `logs/anytime_g2000.json` 的 hist_hv 轨迹（G=1..2000），取 G=200 与 G=2000 两点。
     # **用 hist_hv 而不是 final_hv**：后者是末代 archive（算法输出），前者是每代
@@ -1638,6 +1780,8 @@ def main():
     fig_gate(data)
     tab_probe_seeds(data, args.allow_missing)
     tab_rl50(data, args.allow_missing)
+    mix3_order(data, args.allow_missing)
+    ls1_variant(data, args.allow_missing)
     write_macros(data, args.allow_missing)
     with io.open(args.out, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=1, default=float)

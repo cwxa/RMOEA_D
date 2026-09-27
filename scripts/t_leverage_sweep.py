@@ -184,6 +184,21 @@ ARM_DEF = {
                                 init_variant="no_random")),
     "I_rand":     ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
                                 init_variant="random")),
+    # ── 拼接顺序对照（论文 Algorithm 2 的字面顺序 vs 本实现的顺序）──
+    # `I_mix3_paper` 与 `RVNSonly`（≡ `I_mix3`）**只差初始化三段的分桶顺序**：
+    # 论文是 [P1=GW, P2=LS, P3=Random]，本实现是 [Random, LS, GW]。
+    # 初始种群是同一多重集，只是"哪个个体挂在哪个权重向量上"被置换。
+    # 用来判定这条实现偏离**是否影响结果**（见 docs/paper-implementation-conformance.md）。
+    "I_mix3_paper": ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                  init_variant="mix3_paper")),
+    # ── LS1 实现偏离对照（论文原文的 LS1 vs 本实现的 LS1）──
+    # 论文 §4.6 的 LS1 是「**最后完工**工序 → 加工时间最小的另一台机器」（确定性、
+    # 不消耗随机数）；本实现的 `ls1_swap_machine` 是「随机选一道工序 → 换成候选集里
+    # **随机**一台机器」。两者都只换机器（输出必合法），但搜索邻域不同。
+    # `RVNSonly_LS1paper` 与 `RVNSonly` **只差第 0 个算子**，其余全同。
+    # 见 docs/paper-implementation-conformance.md。
+    "RVNSonly_LS1paper": ("rvns", dict(fixed_T=10, rvns_ls_trials=1,
+                                       rvns_ls_table="paper")),
 }
 
 

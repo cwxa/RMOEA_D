@@ -15,12 +15,23 @@ M5 另有用途（缺陷 53）：它把同一族断言写进 `readme.md`，用�
 已经从"`docs/*.md`（非递归、无根级文档）"扩到"`docs/**/*.md` + 根级 `*.md`"——
 在此之前 readme.md 从未被任何口径守卫看过。
 
+M6/M7（缺陷 54，2026-09-27）
+---------------------------
+新锁 `TestBoxCaliberNumbersAreAnnotated` 管的是**另一族**问题：`+1.86%` /
+`ΔHV=+0.01658` 是**盒口径**数字（按论文唯一的实例边界口径只有 `+0.125%`、
+`p=0.058` n.s.），不得脱离口径声明单独出现。
+- **M6** 把 `readme.md`（根级门面）里那行的〔盒口径〕抹掉 —— 证明"裸引用"会被抓；
+- **M7** 把 `docs/qpas-implementation-audit.md` 里补上的口径注**整段回退** ——
+  这份文档**不在** 2026-09-27 第一轮修补的三份之列，用它证明"全库扫"是真的
+  （否则又是缺陷 40/53 的"修复面不全"）。
+
 做法与 `mutation_check_aig.py` 一致：**二进制**读写（Windows 文本模式会把 `\\n`
 翻成 `\\r\\n`，"还原"本身就在改文件）、锚点必须唯一、结束前断言 md5 与备份一致。
 
 用法：
     python scripts/mutation_check_caliber_claim.py
-    python scripts/mutation_check_caliber_claim.py --only cross
+    python scripts/mutation_check_caliber_claim.py --only M6
+    python scripts/mutation_check_caliber_claim.py --only readme
 """
 import argparse
 import hashlib
@@ -31,6 +42,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS = os.path.join(ROOT, "tests", "test_refactor.py")
 LOCK = "TestDocsDoNotAssertRetractedCaliberClaims"
+BOX_LOCK = "TestBoxCaliberNumbersAreAnnotated"
+
 
 # (名字, 相对路径, 正确的修订文本(锚点), 被撤回的旧断言, 预期捕获它的测试类)
 MUTATIONS = [
@@ -63,6 +76,22 @@ MUTATIONS = [
      "**同一盒内可比；跨盒、跨口径一律不可引用 —— 包括 `ΔHV` / `p` / `wins`**",
      "**只有 ΔHV / p / wins 可跨批次安全比较**",
      LOCK),
+    # ---- 缺陷 54：盒口径数字的"裸引用"（新锁 TestBoxCaliberNumbersAreAnnotated）----
+    # M6：抹掉 readme.md 那一行的〔盒口径〕，上下两行内再无口径标记 → 必须被抓。
+    ("M6 readme.md 抹掉 `+1.86%` 的口径标注（裸引用）",
+     "readme.md",
+     "| RL 引导选算子 vs 随机选算子（`ls_trials=3`） | **+1.86%**〔**盒口径**〕 | **0.045 \\***〔**盒口径**〕 |",
+     "| RL 引导选算子 vs 随机选算子（`ls_trials=3`） | **+1.86%** | **0.045 \\* ** |",
+     BOX_LOCK),
+    # M7：把 qpas-implementation-audit.md 的口径注**整段回退**。这份文档不在第一轮
+    #    修补的三份之列 —— 用它证明覆盖面真的是"全库扫"，而不是"改了哪几份就只看哪几份"。
+    ("M7 qpas-implementation-audit 回退口径注（证明全库扫）",
+     "docs/qpas-implementation-audit.md",
+     "   时\"RL 引导选算子\"相对\"随机选算子\"才显著（**+1.86%, p=0.045\\***）\n"
+     "   〔**盒口径**（28 臂 / 840 runs）；同一对照按论文唯一的**实例边界口径**只有\n"
+     "   `+0.125%`、`p=0.058`（n.s.）——**那个 `\\*` 是口径造出来的**（缺陷 54）〕。\n",
+     "   时\"RL 引导选算子\"相对\"随机选算子\"才显著（**+1.86%, p=0.045\\***）。\n",
+     BOX_LOCK),
 ]
 
 

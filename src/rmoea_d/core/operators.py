@@ -91,7 +91,16 @@ def init_gw(instance, rng):
 
 def init_mix3(instance, n_pop, rng):
     """MIX3 initialization: 1/3 random, 1/3 LS, 1/3 GW.
-    MIX3初始化策略：三分之一随机、三分之一最短时间、三分之一全局负载均衡。"""
+    MIX3初始化策略：三分之一随机、三分之一最短时间、三分之一全局负载均衡。
+
+    ⚠ **与论文 Algorithm 2 的已知偏离（顺序）**：论文第 4 行把三段合并为
+    `Parent = [P1(GW), P2(LS), P3(Random)]`，本函数生成的是
+    `[Random, LS, GW]` —— **顺序相反**。多重集相同，但"哪个个体挂在哪个权重
+    向量上"被置换，且 rng 消耗顺序不同，故两者**不是**逐位相同的种群。
+    该偏离的影响由 `init_variant="mix3_paper"`（论文顺序）实测判定，
+    见 `docs/paper-implementation-conformance.md`。除拼接顺序外
+    （含余数由 Random 补充），本函数与 Alg.2 一致。
+    """
     population = []
     thirds = n_pop // 3
     for _ in range(thirds):
@@ -202,6 +211,13 @@ INIT_VARIANTS = {
     "mix3_gw_spt": (1, 1, 1, 1, 0),   # 加一路 OS-SPT（4 等分）
     "half_random": (2, 1, 1, 0, 0),   # 提高随机占比
     "no_random":   (0, 1, 1, 0, 0),   # 去掉随机分支
+    # 「论文拼接顺序」变体：**配比与 `mix3` 完全相同**，只把三段的分桶顺序
+    # 改成论文 Algorithm 2 的**字面顺序** `[P1=GW, P2=LS, P3=Random]`
+    # （`mix3` / `init_mix3` 用的是 `[Random, LS, GW]`，与论文相反，见下）。
+    # 存在的意义就是**判定这条偏离有没有影响**：两种顺序的初始种群是同一个
+    # 多重集，差别只在"哪个个体挂在哪个权重向量上"被置换，以及 rng 消耗顺序
+    # 不同（因此不是逐位相同的两个种群）。
+    "mix3_paper":  (1, 1, 1, 0, 0),
 }
 
 
@@ -213,6 +229,9 @@ def init_by_variant(instance, n_pop, rng, variant="mix3"):
     与原始 `init_mix3` 的 [random, ls, gw] 顺序一致 —— 因此
     `init_by_variant(inst, n, rng, "mix3")` 与 `init_mix3(inst, n, rng)`
     在同 seed 下**逐位相同**（见 tests 里的等价锁）。
+
+    唯一例外是 `"mix3_paper"`：它把三段顺序换成论文 Algorithm 2 的字面顺序
+    `[gw, ls, random]`，用来判定"拼接顺序是否影响结果"这条偏离。
     """
     if variant not in INIT_VARIANTS:
         raise ValueError("unknown init variant: %r (可选: %s)"
@@ -231,6 +250,10 @@ def init_by_variant(instance, n_pop, rng, variant="mix3"):
     rest = n_pop - sum(counts)
 
     generators = (init_random, init_ls, init_gw, init_os_spt, init_os_mwr)
+    if variant == "mix3_paper":
+        # 论文 Algorithm 2 的字面拼接顺序：P1(GW) → P2(LS) → P3(Random)。
+        # 余数仍由 Random 补（Alg.2 第 8 行），且**追加在末尾**——与论文一致。
+        generators = (init_gw, init_ls, init_random, init_os_spt, init_os_mwr)
     population = []
     for gen, c in zip(generators, counts):
         for _ in range(c):

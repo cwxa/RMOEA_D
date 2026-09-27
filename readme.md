@@ -135,6 +135,7 @@ RMOEA_D/
 └── docs/                                # 论文与设计文档
     ├── ablation-qpas-rvns-diagnosis.md  # ★ 消融诊断：4 个 bug + T 杠杆 + 六级阶梯复现 (§9)
     ├── paper-vs-reproduction.md         # ★ 与论文 (Li et al. 2022) 的逐条对照
+    ├── paper-implementation-conformance.md # ★ 论文 Algorithm 1–5 逐条一致性核对 + 6 处差异
     ├── qpas-implementation-audit.md     # ★ Q-PAS 实现审计 (逐条核对 + 6 处论文笔误)
     ├── qpas-optimization-plan.md        # ★ Q-PAS/算法优化方案 + §10 执行记录 (Gating/ABA 均判负)
     ├── aba-budget-allocation.md         # ★ ABA 方法定义 + §6 实验结果 (等算力下的预算分配: 负结果)
@@ -413,14 +414,21 @@ T10/15/20/50/100 极差 `0.000839`（0.0905%），而 run 间 sd 为 `0.0030~0.0
 |---|---|---|
 | 加上局部搜索本身（论文 `ls_trials=1`） | +5.68% | 1.8e-05 \*\*\* |
 | RL 引导选算子 vs 随机选算子（`ls_trials=1`） | −0.25% | 0.53 n.s. |
-| RL 引导选算子 vs 随机选算子（`ls_trials=3`） | **+1.86%** | **0.045 \*** |
+| RL 引导选算子 vs 随机选算子（`ls_trials=3`） | **+1.86%**〔**盒口径**〕 | **0.045 \***〔**盒口径**〕 |
 | 邻域尝试 1 → 3 次 | **+4.68%** | 3.5e-05 \*\*\* |
 
 > ⚠ 上表是**盒口径**（实例边界口径下 §9 阶梯给 **RVNS −0.02%，n.s.**，甚至倒退）。
 > 且 `+1.86%\*` **过不了等算力对照**：`G440` 家族（算力仅 1.06×）下退化为
 > **+0.56%, 15/30, p=0.73 n.s.**（见 `docs/paper-vs-reproduction.md` 的等算力段）。
 > 即 **「RL 引导选算子」在本项目里始终没有可复现的净贡献**。
-详见 `docs/ablation-qpas-rvns-diagnosis.md`。
+>
+> **⚠ 2026-09-27 补（缺陷 54）**：`+1.86%` 是**盒口径**，按论文唯一的**实例边界口径**
+> 重算同一对照只有 **`+0.125%`（21/30，`p=0.058`，n.s.）** —— 盒口径放大 15～18 倍，
+> 且 **`p` 也会变**（`0.0497` → `0.0606`），那个 `\*` 是口径造出来的。
+> **n=50 独立复验**（`logs/rl50.json`）：论文设定 `ls_trials=1` 下 **Mk09/Mk10 都不显著**；
+> `ls_trials=3` 只在 Mk10 上显著且仅 **`+0.150%`（35/50，`p=0.0052\*\*`，`d_z=0.42`）**，
+> Mk09 不复现。复现：`python scripts/rl50_analyze.py --labs logs/_mk10_rl50.json,logs/_mk09_rl50.json`
+详见 `docs/ablation-qpas-rvns-diagnosis.md` 与 `docs/qpas-optimization-plan.md` §0。
 
 ---
 
